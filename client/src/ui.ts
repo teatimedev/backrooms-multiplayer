@@ -62,6 +62,7 @@ export class UI {
           <input id="t-code" type="text" maxlength="12" placeholder="CODE-0000" style="text-transform:uppercase" />
           <button id="t-join">JOIN</button>
         </div>
+        <button id="t-rejoin" style="display:none"></button>
         <div class="hint">host gets a code · friends join with it · 2–8 wanderers<br/>
         pull 3 breakers to power the exit · leave together · the light slows it<br/>${CONTROLS_HTML}</div>
       </div>`;
@@ -96,6 +97,18 @@ export class UI {
       else codeEl.focus();
     };
     codeEl.onkeydown = (e) => { if (e.key === 'Enter' && codeEl.value.trim()) go('join'); };
+
+    // crash recovery: one click back into your last session
+    const last = localStorage.getItem('br_last');
+    if (last) {
+      const rj = el.querySelector('#t-rejoin') as HTMLButtonElement;
+      rj.style.display = 'block';
+      rj.textContent = `REJOIN ${last}`;
+      rj.onclick = () => {
+        codeEl.value = last;
+        go('join');
+      };
+    }
   }
 
   showLoading(text: string): void {

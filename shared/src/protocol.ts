@@ -42,6 +42,7 @@ export type C2S =
   | { t: 'flick' }
   | { t: 'revive'; id: string; on: boolean }
   | { t: 'drink' }
+  | { t: 'mark'; kind: 'breaker' | 'exit'; id: string }
   | { t: 'descend' }
   | { t: 'restart' }
   | { t: 'dbg'; cmd: string; id?: string }
@@ -56,6 +57,7 @@ export type S2C =
   | { t: 'chalk'; m: Mark }
   | { t: 'pickup'; id: string; by: string }
   | { t: 'breaker'; id: string; by: string; left: number }
+  | { t: 'marked'; kind: 'breaker' | 'exit'; id: string; by: string }
   | { t: 'powered' }
   | { t: 'retreat'; x: number; z: number }
   | { t: 'down'; id: string }

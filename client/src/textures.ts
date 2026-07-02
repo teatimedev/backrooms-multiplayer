@@ -163,6 +163,53 @@ export function chalkWriting(text: string): THREE.CanvasTexture {
   return t;
 }
 
+/** Faded motivational office poster. Nobody was motivated. */
+export function posterTex(): THREE.CanvasTexture {
+  const [c, ctx] = canvas(256);
+  const themes = [
+    { bg: ['#3a5a6e', '#c9a86a'], word: 'PERSIST', sub: 'the only way out is through' },
+    { bg: ['#5e3a2e', '#d9b46a'], word: 'TEAMWORK', sub: 'nobody wanders alone' },
+    { bg: ['#2e4a3a', '#a8c47a'], word: 'HYDRATE', sub: 'drink plenty of water' },
+    { bg: ['#4a3a5e', '#c48ab0'], word: 'SMILE', sub: 'someone is always watching' },
+  ];
+  const t = themes[Math.floor(Math.random() * themes.length)];
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, t.bg[0]); g.addColorStop(1, t.bg[1]);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = 'rgba(240,235,220,0.85)';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 34px Georgia, serif';
+  ctx.fillText(t.word, 128, 180);
+  ctx.font = 'italic 14px Georgia, serif';
+  ctx.fillStyle = 'rgba(240,235,220,0.6)';
+  ctx.fillText(t.sub, 128, 210);
+  // sun-bleach + grime
+  ctx.fillStyle = 'rgba(200,180,120,0.25)';
+  ctx.fillRect(0, 0, 256, 256);
+  stains(ctx, 256, 8, 'rgba(60,45,20,0.25)', 40);
+  grain(ctx, 256, 0.08);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Bricks. For doors that should not be opened. */
+export function brickTex(): THREE.CanvasTexture {
+  const [c, ctx] = canvas(256);
+  ctx.fillStyle = '#4a3830'; ctx.fillRect(0, 0, 256, 256);
+  const bh = 24, bw = 52;
+  for (let y = 0, row = 0; y < 256; y += bh, row++) {
+    for (let x = -(row % 2) * bw / 2; x < 256; x += bw) {
+      ctx.fillStyle = `rgb(${110 + Math.random() * 30 | 0},${60 + Math.random() * 18 | 0},${45 + Math.random() * 14 | 0})`;
+      ctx.fillRect(x + 2, y + 2, bw - 4, bh - 4);
+    }
+  }
+  grain(ctx, 256, 0.1);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export const CHALK_SYMBOLS = ['↑', '→', '↓', '←', '✕', '?', '○', '!'] as const;
 
 /** One chalk decal texture per symbol, white on transparent. */

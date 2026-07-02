@@ -2,7 +2,7 @@
 // everything else is noise bursts, filtered and placed in 3D.
 import * as THREE from 'three';
 
-type Surface = 'carpet' | 'tile' | 'concrete';
+type Surface = 'carpet' | 'tile' | 'concrete' | 'water';
 
 export class GameAudio {
   ctx: AudioContext | null = null;
@@ -163,8 +163,13 @@ export class GameAudio {
       carpet: { f: 320, q: 0.8, g: 0.10, d: 0.11 },
       tile: { f: 1900, q: 2.5, g: 0.09, d: 0.09 },
       concrete: { f: 800, q: 1.4, g: 0.11, d: 0.13 },
+      water: { f: 1100, q: 0.6, g: 0.14, d: 0.2 },
     }[surface];
     this.burst(this.master, 0.25, 'bandpass', cfg.f * (0.9 + Math.random() * 0.2), cfg.q, cfg.g * intensity, cfg.d);
+    if (surface === 'water') {
+      // the splash's little sisters
+      setTimeout(() => this.burst(this.master, 0.15, 'highpass', 3000, 1, 0.05 * intensity, 0.09), 60);
+    }
   }
 
   posFootstep(x: number, z: number, intensity: number, heavy = false): void {
@@ -261,9 +266,11 @@ export class GameAudio {
   /** Electrical spitting from an unpulled breaker — an audio beacon. */
   spark(x: number, z: number): void {
     if (!this.ctx) return;
-    const p = this.panner(x, 1.2, z); p.connect(this.master);
+    const p = this.panner(x, 1.2, z);
+    p.maxDistance = 90; p.rolloffFactor = 1.1; // carries further than most sounds
+    p.connect(this.master);
     for (let i = 0; i < 3; i++) {
-      setTimeout(() => this.burst(p, 0.12, 'highpass', 5200, 1.5, 0.3, 0.05), i * (60 + Math.random() * 90));
+      setTimeout(() => this.burst(p, 0.12, 'highpass', 5200, 1.5, 0.45, 0.05), i * (60 + Math.random() * 90));
     }
   }
 

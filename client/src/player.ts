@@ -16,6 +16,7 @@ export class Player {
   sanity = 100;
   alive = true;
   downed = false;
+  adrenaline = false; // set by the game when the entity is close: fear is fuel
   private eyeH = EYE;
   frozen = true; // no movement until pointer locked & spawned
   anim: Anim = 0;
@@ -69,7 +70,9 @@ export class Player {
     const moving = fx !== 0 || fz !== 0;
     const wantRun = k.has('ShiftLeft') || k.has('ShiftRight');
     this.sprinting = this.alive && !this.downed && moving && wantRun && this.stamina > 0.02;
-    this.stamina = Math.max(0, Math.min(1, this.stamina + (this.sprinting ? -dt / 6.5 : dt / 5.5)));
+    const drain = (dt / 6.5) * (this.adrenaline ? 0.65 : 1);
+    const regen = (dt / 5.5) * (this.adrenaline ? 2.2 : 1);
+    this.stamina = Math.max(0, Math.min(1, this.stamina + (this.sprinting ? -drain : regen)));
 
     const speed = !this.alive ? ECHO_FLY : this.downed ? CRAWL : this.sprinting ? RUN : WALK;
     // world-space wish direction from yaw (forward is -Z rotated by yaw)

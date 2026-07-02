@@ -9,7 +9,7 @@
 // scare-pass: it closes in, stares, and leaves. It teaches before it kills.
 // A catch downs the target (teammates can revive); it always retreats after
 // a takedown and won't re-target the same player immediately.
-import { CELL, cellBlocked, losBlocked, resolveCollision } from '../../shared/src/worldgen.js';
+import { CELL, cellBlocked, losBlocked, resolveCollision, roundModifier } from '../../shared/src/worldgen.js';
 import type { Room, Player } from './room.js';
 
 type Cell = { x: number; z: number };
@@ -103,6 +103,7 @@ export class Entity {
   /** 0..1 appetite: round time + breakers pulled + previous takedowns + how deep you've gone. */
   private hungerOf(room: Room): number {
     let h = room.ageSec() / 480 + room.breakers.size * 0.12 + this.kills * 0.1 + room.depth * 0.22;
+    if (roundModifier(room.seed) === 'hunger') h += 0.18;
     if (this.enraged) h = Math.max(h, 0.85);
     return Math.min(1, h);
   }

@@ -23,6 +23,29 @@ export const BREAKERS_NEEDED = 3;
 export const mod = (n: number, m: number): number => ((n % m) + m) % m;
 export const isHall = (x: number, z: number): boolean => mod(x, BLOCK) === 0 || mod(z, BLOCK) === 0;
 
+// ---------------------------------------------------------------- modifiers
+// Every round rolls a floor condition. Pure function of seed, so all clients
+// and the server agree without a single extra byte on the wire.
+
+export type Modifier = 'none' | 'flood' | 'brownout' | 'hunger' | 'clutter';
+
+export function roundModifier(seed: number): Modifier {
+  const r = r2(seed, 7, 3, 77);
+  if (r < 0.36) return 'none';
+  if (r < 0.54) return 'flood';
+  if (r < 0.70) return 'brownout';
+  if (r < 0.85) return 'hunger';
+  return 'clutter';
+}
+
+export const MODIFIER_INFO: Record<Modifier, { name: string; blurb: string }> = {
+  none: { name: '', blurb: '' },
+  flood: { name: 'THE FLOOD', blurb: 'whole sections have drowned' },
+  brownout: { name: 'BROWNOUT', blurb: 'half the lights never come back' },
+  hunger: { name: 'THE HUNGER', blurb: 'it is bolder tonight' },
+  clutter: { name: 'THE HOARD', blurb: 'someone was building something in here' },
+};
+
 // ---------------------------------------------------------------- layout
 // The macro layout (exit + breakers) is computed once per seed and memoised —
 // blockArchetype is called in every inner worldgen loop.
@@ -86,12 +109,22 @@ export function blockArchetype(seed: number, bx: number, bz: number): Archetype 
   if (bx === l.exit.bx && bz === l.exit.bz) return 'landmark';
   if (l.breakers.some((b) => b.bx === bx && b.bz === bz)) return 'landmark';
   const r = r2(seed, bx, bz, 7);
-  if (r < 0.20) return 'plain';
-  if (r < 0.42) return 'rooms';
-  if (r < 0.54) return 'corridors';
-  if (r < 0.66) return 'pillars';
-  if (r < 0.76) return 'cubicles';
-  if (r < 0.85) return 'storage';
+  if (roundModifier(seed) === 'flood') {
+    if (r < 0.10) return 'plain';
+    if (r < 0.29) return 'rooms';
+    if (r < 0.41) return 'corridors';
+    if (r < 0.50) return 'pillars';
+    if (r < 0.61) return 'cubicles';
+    if (r < 0.72) return 'storage';
+    if (r < 0.92) return 'pool';
+    return 'landmark';
+  }
+  if (r < 0.14) return 'plain';
+  if (r < 0.37) return 'rooms';
+  if (r < 0.49) return 'corridors';
+  if (r < 0.61) return 'pillars';
+  if (r < 0.72) return 'cubicles';
+  if (r < 0.83) return 'storage';
   if (r < 0.92) return 'pool';
   return 'landmark';
 }
@@ -123,7 +156,8 @@ export function wallN(seed: number, x: number, z: number): number {
   }
   const bx = Math.floor(x / BLOCK), bz = Math.floor(z / BLOCK);
   const a = blockArchetype(seed, bx, bz);
-  if (a === 'rooms') return r2(seed, x, z, 1) < 0.44 ? 2 : 0;
+  const roomP = roundModifier(seed) === 'clutter' ? 0.52 : 0.44;
+  if (a === 'rooms') return r2(seed, x, z, 1) < roomP ? 2 : 0;
   if (a === 'corridors') return r2(seed, x, z, 1) > 0.18 ? 2 : 0;
   if (a === 'cubicles') return r2(seed, x, z, 1) < 0.52 ? 1 : 0;
   return 0;
@@ -137,7 +171,8 @@ export function wallW(seed: number, x: number, z: number): number {
   }
   const bx = Math.floor(x / BLOCK), bz = Math.floor(z / BLOCK);
   const a = blockArchetype(seed, bx, bz);
-  if (a === 'rooms') return r2(seed, x, z, 2) < 0.44 ? 2 : 0;
+  const roomP = roundModifier(seed) === 'clutter' ? 0.52 : 0.44;
+  if (a === 'rooms') return r2(seed, x, z, 2) < roomP ? 2 : 0;
   if (a === 'corridors') return r2(seed, x, z, 2) < 0.10 ? 2 : 0;
   if (a === 'cubicles') return r2(seed, x, z, 2) < 0.52 ? 1 : 0;
   return 0;
@@ -171,7 +206,7 @@ export function fixtureAt(seed: number, x: number, z: number): boolean {
 export function fixtureDead(seed: number, x: number, z: number): boolean {
   const bx = Math.floor(x / BLOCK), bz = Math.floor(z / BLOCK);
   if (blockDark(seed, bx, bz)) return r2(seed, x, z, 5) > 0.12; // dark blocks: nearly all dead
-  return r2(seed, x, z, 5) < 0.08;
+  return r2(seed, x, z, 5) < (roundModifier(seed) === 'brownout' ? 0.22 : 0.08);
 }
 
 // ---------------------------------------------------------------- pickups
@@ -182,7 +217,10 @@ export function almondAt(seed: number, bx: number, bz: number): { id: string; x:
   const isShrine = a === 'landmark' && landmarkKind(seed, bx, bz) === 'shrine';
   if (!isShrine && r2(seed, bx, bz, 21) > 0.28) return null;
   const ox = 1 + (hash2(seed, bx, bz, 22) % 6);
-  const oz = 1 + (hash2(seed, bx, bz, 23) % 6);
+  // storage blocks: shelves live on odd-z cells — keep bottles in the aisles
+  const oz = a === 'storage'
+    ? 2 + 2 * (hash2(seed, bx, bz, 23) % 3)
+    : 1 + (hash2(seed, bx, bz, 23) % 6);
   const cx = isShrine ? bx * BLOCK + 4 : bx * BLOCK + ox;
   const cz = isShrine ? bz * BLOCK + 4 : bz * BLOCK + oz;
   return { id: `${bx}:${bz}`, x: cx * CELL + CELL / 2, z: cz * CELL + CELL / 2 };

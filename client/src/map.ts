@@ -26,6 +26,7 @@ export class MentalMap {
   exitSeen: { x: number; z: number } | null = null;
   pois: POI[] = [];
   deaths: { x: number; z: number }[] = [];
+  knownBreakers = new Set<string>(); // crew intel: marked for everyone
 
   constructor(parent: HTMLElement) {
     this.canvas = document.createElement('canvas');
@@ -43,6 +44,7 @@ export class MentalMap {
     this.exitSeen = null;
     this.pois = [];
     this.deaths = [];
+    this.knownBreakers.clear();
   }
 
   addPOI(x: number, z: number, kind: string): void {
@@ -68,7 +70,8 @@ export class MentalMap {
   }
 
   draw(seed: number, px: number, pz: number, yaw: number, avatars: Map<string, Avatar>, now: number,
-    breakers: { x: number; z: number; collected: boolean }[] = [], marks: Mark[] = []): void {
+    breakers: { id?: string; x: number; z: number; collected: boolean }[] = [], marks: Mark[] = [],
+    entity: { x: number; z: number } | null = null): void {
     this.canvas.style.display = this.visible ? 'block' : 'none';
     if (!this.visible) return;
     const PX = ZOOMS[this.zoom];
@@ -127,10 +130,12 @@ export class MentalMap {
       ctx.fillText(POI_GLYPH[p.kind] ?? '·', sx, sz);
     }
 
-    // breaker panels
+    // breaker panels — shown once anyone on the crew has found them
     for (const b of breakers) {
       const bcx = b.x / CELL, bcz = b.z / CELL;
-      if (!this.visited.has(`${Math.floor(bcx)},${Math.floor(bcz)}`)) continue;
+      const known = (b.id && this.knownBreakers.has(b.id)) ||
+        this.visited.has(`${Math.floor(bcx)},${Math.floor(bcz)}`);
+      if (!known) continue;
       if (Math.abs(bcx - ccx) > half || Math.abs(bcz - ccz) > half) {
         this.edgeArrow(ctx, w, px, pz, b.x, b.z, b.collected ? '#4dff88' : '#ffb347');
         continue;
@@ -181,6 +186,18 @@ export class MentalMap {
         ctx.strokeStyle = col;
         ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(sx, sz, 7 + Math.sin(now * 6) * 2.5, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+
+    // the dead see it. it's only fair.
+    if (entity) {
+      const ecx = entity.x / CELL, ecz = entity.z / CELL;
+      if (Math.abs(ecx - ccx) <= half && Math.abs(ecz - ccz) <= half) {
+        const [sx, sz] = toScreen(ecx, ecz);
+        ctx.fillStyle = '#ff2a1a';
+        ctx.beginPath(); ctx.arc(sx, sz, 5 + Math.sin(now * 8) * 1.5, 0, Math.PI * 2); ctx.fill();
+      } else {
+        this.edgeArrow(ctx, w, px, pz, entity.x, entity.z, '#ff2a1a');
       }
     }
 

@@ -18,9 +18,11 @@ ui.onIntent = async (intent) => {
     return;
   }
   net.on('err', (m) => {
+    localStorage.removeItem('br_last');
     if (!game) ui.showTitle(m.msg);
   });
   net.on('joined', (m) => {
+    localStorage.setItem('br_last', m.code);
     game?.dispose();
     game = new Game(net, ui, m, intent.voice);
   });

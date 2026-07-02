@@ -1,6 +1,6 @@
 // The conductor: rendering, input, network events, sanity, the loop.
 import * as THREE from 'three';
-import { BREAKERS_NEEDED, landmarkKind, blockArchetype, BLOCK, CELL, losBlocked, resolveCollision } from '@shared/worldgen';
+import { BREAKERS_NEEDED, landmarkKind, blockArchetype, BLOCK, CELL, losBlocked, resolveCollision, roundModifier, MODIFIER_INFO } from '@shared/worldgen';
 import { AVATAR_COLORS, BLEED_OUT_HELPED, BLEED_OUT_SOLO, REVIVE_RANGE } from '@shared/protocol';
 import type { PlayerInfo, S2C, StateTuple } from '@shared/protocol';
 import { World, LightPool } from './world';
@@ -58,6 +58,9 @@ export class Game {
   private hemi: THREE.HemisphereLight;
   private depth = 0;
   private bottles = 0;
+  private senseTimer = 70;
+  private myMarked = new Set<string>();
+  private stats = { downs: 0, revives: 0, breakers: new Map<string, number>() };
   private radialHeld = false;
   private radialVec = { x: 0, y: 0 };
   private radialSel = 0;
@@ -109,6 +112,7 @@ export class Game {
     this.map = new MentalMap(document.getElementById('hud')!);
     this.refreshObjective();
     ui.chatLine('', `you are in session ${this.code}`);
+    this.announceModifier();
 
     for (const p of joined.players) {
       this.names.set(p.id, p.name);
@@ -147,6 +151,13 @@ export class Game {
     this.hemi.intensity = t.hemiIntensity;
     this.entity.setDepth(this.depth);
     this.glimpse.setDepth(this.depth);
+  }
+
+  private announceModifier(): void {
+    const m = roundModifier(this.seed);
+    if (m === 'none') return;
+    const info = MODIFIER_INFO[m];
+    setTimeout(() => this.ui.toast(`tonight: ${info.name} — ${info.blurb}`, 6000), 2500);
   }
 
   private refreshObjective(): void {
@@ -206,7 +217,18 @@ export class Game {
       this.audio.breakerClunk();
       this.refreshObjective();
       const who = m.by === this.myId ? 'you' : this.names.get(m.by) ?? 'someone';
+      const name = m.by === this.myId ? 'you' : this.names.get(m.by) ?? '?';
+      this.stats.breakers.set(name, (this.stats.breakers.get(name) ?? 0) + 1);
       if (m.left > 0) this.ui.toast(`${who} pulled a breaker — ${m.left} left`, 4000);
+    });
+    net.on('marked', (m) => {
+      if (m.kind === 'breaker') {
+        this.map.knownBreakers.add(m.id);
+        if (m.by !== this.myId) this.ui.toast(`${this.names.get(m.by) ?? 'someone'} found a breaker — marked on your map`, 4500);
+      } else {
+        this.map.exitSeen = { x: this.world.exit.x, z: this.world.exit.z };
+        if (m.by !== this.myId) this.ui.toast(`${this.names.get(m.by) ?? 'someone'} found the exit — marked on your map`, 4500);
+      }
     });
     net.on('powered', () => {
       this.world.setPowered();
@@ -221,6 +243,7 @@ export class Game {
     });
     net.on('down', (m) => {
       this.downedIds.add(m.id);
+      this.stats.downs++;
       if (m.id === this.myId) {
         this.player.downed = true;
         this.myDownedAt = Date.now();
@@ -254,6 +277,7 @@ export class Game {
     });
     net.on('revived', (m) => {
       this.downedIds.delete(m.id);
+      this.stats.revives++;
       this.ui.setReviveBar(null, 0);
       if (m.id === this.myId) {
         this.player.downed = false;
@@ -290,11 +314,11 @@ export class Game {
       document.exitPointerLock();
       if (m.final) {
         setTimeout(() => this.ui.showEnd('final',
-          `you went all the way down — and came out the other side.<br/>${mins}m ${secs}s in the poolrooms. it will remember you.`,
+          `you went all the way down — and came out the other side.<br/>${mins}m ${secs}s in the poolrooms. it will remember you.${this.statsLine()}`,
           () => this.net.send({ t: 'restart' }), () => location.reload()), 900);
       } else {
         setTimeout(() => this.ui.showEnd('win',
-          `everyone stepped through together — ${mins}m ${secs}s.<br/>but the door doesn't go OUT. it goes DOWN.`,
+          `everyone stepped through together — ${mins}m ${secs}s.<br/>but the door doesn't go OUT. it goes DOWN.${this.statsLine()}`,
           () => this.net.send({ t: 'descend' }), () => location.reload()), 900);
       }
     });
@@ -303,7 +327,7 @@ export class Game {
       document.exitPointerLock();
       const mins = Math.floor(m.time / 60), secs = m.time % 60;
       setTimeout(() => this.ui.showEnd('wipe',
-        `the backrooms kept every one of you.<br/>you lasted ${mins}m ${secs}s. only echoes remain.`,
+        `the backrooms kept every one of you.<br/>you lasted ${mins}m ${secs}s. only echoes remain.${this.statsLine()}`,
         () => this.net.send({ t: 'restart' }), () => location.reload()), 1200);
     });
     net.on('round', (m) => this.newRound(m.seed, m.spawn, m.depth));
@@ -337,7 +361,11 @@ export class Game {
     this.stepTimers.clear();
     this.downedIds.clear();
     this.reviveTargetId = null;
+    this.myMarked.clear();
+    this.senseTimer = 70;
+    this.stats = { downs: 0, revives: 0, breakers: new Map() };
     this.roundStartMs = Date.now();
+    this.announceModifier();
     this.ui.setReviveBar(null, 0);
     this.ui.setBleed(null);
     for (const av of this.avatars.values()) av.alive = true;
@@ -438,11 +466,20 @@ export class Game {
             this.net.send({ t: 'revive', id: downed, on: true });
             break;
           }
+          let pulled = false;
           for (const b of this.world.breakers.values()) {
             if (!b.collected && Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z) < 2.6) {
               this.net.send({ t: 'breaker', id: b.id });
+              pulled = true;
               break;
             }
+          }
+          if (!pulled && this.world.tryOpenDoor(this.player.pos.x, this.player.pos.z)) {
+            // bricks. and something noticed you trying.
+            this.audio.mimic(this.player.pos.x + 1, this.player.pos.z - 1, 'voice');
+            this.player.sanity = Math.max(5, this.player.sanity - 18);
+            this.player.shake = Math.max(this.player.shake, 0.035);
+            this.ui.toast('bricks.', 3000);
           }
           break;
         }
@@ -526,6 +563,11 @@ export class Game {
     } else {
       this.ui.toast(`almond water — you can feel ${what}. hold TAB.`);
     }
+  }
+
+  private statsLine(): string {
+    const pulls = [...this.stats.breakers.entries()].map(([n, c]) => `${n} ${c}`).join(' · ') || 'none';
+    return `<br/><span style="font-size:12px;opacity:0.7">downs ${this.stats.downs} · revives ${this.stats.revives} · breakers: ${pulls}</span>`;
   }
 
   private nearestDowned(range: number): string | null {
@@ -625,6 +667,7 @@ export class Game {
     }
     this.audio.danger = p.alive ? Math.max(danger, p.downed ? 0.45 : 0) : 0;
     this.fx.danger = p.alive ? danger : 0;
+    p.adrenaline = danger > 0.45; // fear is fuel: stamina surges in a chase
     if (p.alive && danger > 0.55) p.shake = Math.max(p.shake, (danger - 0.55) * 0.05);
     if (this.entity.active && this.entity.mode === 2) {
       const t = this.stepTimers.get('__entity') ?? 0;
@@ -691,14 +734,44 @@ export class Game {
     // uncollected breakers spit sparks — follow the sound
     this.sparkTimer -= dt;
     if (this.sparkTimer <= 0) {
-      this.sparkTimer = 3.5 + Math.random() * 3;
-      let nb: { x: number; z: number } | null = null, nd = 24;
+      this.sparkTimer = 2.6 + Math.random() * 2.4;
+      let nb: { x: number; z: number } | null = null, nd = 38;
       for (const b of this.world.breakers.values()) {
         if (b.collected) continue;
         const d = Math.hypot(b.x - p.pos.x, b.z - p.pos.z);
         if (d < nd) { nd = d; nb = b; }
       }
       if (nb) this.audio.spark(nb.x, nb.z);
+    }
+
+    // share intel: walk near a breaker once and the whole crew's maps learn it
+    if (p.alive) {
+      for (const b of this.world.breakers.values()) {
+        if (this.myMarked.has(b.id)) continue;
+        if (Math.hypot(b.x - p.pos.x, b.z - p.pos.z) < 14) {
+          this.myMarked.add(b.id);
+          this.map.knownBreakers.add(b.id);
+          this.net.send({ t: 'mark', kind: 'breaker', id: b.id });
+        }
+      }
+    }
+
+    // the current sense: while the power is off, the walls hum you a heading
+    if (p.alive && !this.world.powered) {
+      this.senseTimer -= dt;
+      if (this.senseTimer <= 0) {
+        this.senseTimer = 75;
+        let tx = 0, tz = 0, best = Infinity;
+        for (const b of this.world.breakers.values()) {
+          if (b.collected) continue;
+          const d = Math.hypot(b.x - p.pos.x, b.z - p.pos.z);
+          if (d < best) { best = d; tx = b.x; tz = b.z; }
+        }
+        if (best < Infinity) {
+          this.map.pulse = { angle: Math.atan2(tz - p.pos.z, tx - p.pos.x), until: performance.now() / 1000 + 5 };
+          this.ui.toast('you feel the current in the walls — hold TAB', 3500);
+        }
+      }
     }
 
     // interaction hint: revive beats breaker
@@ -711,7 +784,8 @@ export class Game {
         for (const b of this.world.breakers.values()) {
           if (!b.collected && Math.hypot(b.x - p.pos.x, b.z - p.pos.z) < 2.6) { nearBreaker = true; break; }
         }
-        this.ui.setHint(nearBreaker ? 'E — pull the breaker' : '');
+        this.ui.setHint(nearBreaker ? 'E — pull the breaker'
+          : this.world.nearUnopenedDoor(p.pos.x, p.pos.z) ? 'E — it says NOT AN EXIT' : '');
       }
     } else {
       this.ui.setHint('');
@@ -832,6 +906,7 @@ export class Game {
     const exDist = Math.hypot(ex.x - p.pos.x, ex.z - p.pos.z);
     if (exDist < 30 && !this.map.exitSeen) {
       this.map.exitSeen = { x: ex.x, z: ex.z };
+      this.net.send({ t: 'mark', kind: 'exit', id: 'exit' });
       this.ui.toast(this.world.powered
         ? 'the doorway is live. bring everyone.'
         : 'a dead doorway. it wants power — find the breakers.', 5000);
@@ -848,7 +923,8 @@ export class Game {
 
     // hud
     this.ui.setStamina(p.stamina);
-    this.map.draw(this.seed, p.pos.x, p.pos.z, p.yaw, this.avatars, now, [...this.world.breakers.values()], this.chalk.marks);
+    this.map.draw(this.seed, p.pos.x, p.pos.z, p.yaw, this.avatars, now, [...this.world.breakers.values()], this.chalk.marks,
+      !p.alive && this.entity.active ? { x: this.entity.pos.x, z: this.entity.pos.y } : null);
 
     this.fx.render(dt, time);
   };

@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import {
   BLOCK, CELL, WALL_H, LOW_WALL_H, WALL_HALF_T,
   blockArchetype, blockDark, landmarkKind, wallN, wallW, pillarAt, shelfAt,
-  fixtureAt, fixtureDead, almondAt, exitPos, breakerSpots, mod,
+  fixtureAt, fixtureDead, almondAt, exitPos, breakerSpots, roundModifier,
 } from '@shared/worldgen';
 import { hash2, rand01, mulberry32 } from '@shared/rng';
 import * as tx from './textures';
@@ -76,6 +76,9 @@ export class World {
   breakers = new Map<string, Breaker>();
   powered = false;
   blackoutUntil = 0;
+  doors: { x: number; z: number; slab: THREE.Mesh; brick: THREE.Mesh; opened: boolean }[] = [];
+  private waterMeshes: THREE.Mesh[] = [];
+  private wet: boolean; // flood modifier or poolrooms: pool blocks hold water
 
   theme: Theme;
   depth: number;
@@ -94,6 +97,7 @@ export class World {
     this.theme = THEMES[Math.min(depth, THEMES.length - 1)];
     this.taken = new Set(taken);
     this.exit = exitPos(seed);
+    this.wet = depth >= 2 || roundModifier(seed) === 'flood';
     const collected = new Set(collectedBreakers);
     for (const b of breakerSpots(seed)) {
       this.breakers.set(b.id, { id: b.id, x: b.x, z: b.z, collected: collected.has(b.id), lever: null, strip: null, light: null });
@@ -130,11 +134,13 @@ export class World {
   /** All meshes a chalk raycast may hit (walls + floors + ceilings). */
   raycastTargets(): THREE.Object3D[] { return this.wallsRaycast; }
 
-  surfaceAt(x: number, z: number): 'carpet' | 'tile' | 'concrete' {
+  surfaceAt(x: number, z: number): 'carpet' | 'tile' | 'concrete' | 'water' {
     const bx = Math.floor(x / (BLOCK * CELL)), bz = Math.floor(z / (BLOCK * CELL));
     const a = blockArchetype(this.seed, bx, bz);
-    if (a === 'pool') return 'tile';
+    if (a === 'pool') return this.wet ? 'water' : 'tile';
     if (a === 'landmark') return 'concrete';
+    if (this.theme.floorsAre === 'concrete') return 'concrete';
+    if (this.theme.floorsAre === 'pool') return 'tile';
     return 'carpet';
   }
 
@@ -155,6 +161,8 @@ export class World {
           if (m.geometry && m.geometry !== this.wallGeo && m.geometry !== this.fixtureGeo) m.geometry.dispose();
         });
         this.wallsRaycast = this.wallsRaycast.filter((o) => !chunk.group.children.includes(o));
+        this.waterMeshes = this.waterMeshes.filter((w) => w.parent);
+        this.doors = this.doors.filter((d) => d.slab.parent);
         this.chunks.delete(key);
       }
     }
@@ -184,11 +192,34 @@ export class World {
     if (this.exitLight) {
       this.exitLight.intensity = this.powered ? 2.6 + Math.sin(time * 1.7) * 0.7 : 0;
     }
+    for (const w of this.waterMeshes) {
+      const m = w.material as THREE.MeshStandardMaterial;
+      m.opacity = 0.32 + Math.sin(time * 0.9 + w.position.x * 0.13) * 0.05;
+      if (m.map) { m.map.offset.x = Math.sin(time * 0.12) * 0.02; m.map.offset.y = time * 0.004; }
+    }
     for (const b of this.breakers.values()) {
       if (!b.light) continue;
       // uncollected: nervous amber sparking · collected: steady green
       b.light.intensity = b.collected ? 2.0 : (Math.random() < 0.08 ? 4.5 : 1.3 + Math.random() * 0.8);
     }
+  }
+
+  /** The red door. It opens exactly once, onto bricks. Returns true first time. */
+  tryOpenDoor(px: number, pz: number): boolean {
+    for (const d of this.doors) {
+      if (d.opened || Math.hypot(d.x - px, d.z - pz) > 2.4) continue;
+      d.opened = true;
+      d.slab.rotation.y = -1.9;
+      d.slab.position.x += 0.35;
+      d.slab.position.z -= 0.45;
+      d.brick.visible = true;
+      return true;
+    }
+    return false;
+  }
+
+  nearUnopenedDoor(px: number, pz: number): boolean {
+    return this.doors.some((d) => !d.opened && Math.hypot(d.x - px, d.z - pz) < 2.4);
   }
 
   collectBreaker(id: string): void {
@@ -371,7 +402,8 @@ export class World {
     // scattered junk: the backrooms are abandoned, not empty
     const junkRnd = mulberry32(hash2(seed, bx, bz, 60));
     if (arch !== 'landmark' && arch !== 'storage') {
-      const n = Math.floor(junkRnd() * 3);
+      const clutter = roundModifier(seed) === 'clutter' ? 3 : 0;
+      const n = 1 + Math.floor(junkRnd() * 3) + clutter;
       for (let i = 0; i < n; i++) {
         const lx = 1 + Math.floor(junkRnd() * 6), lz = 1 + Math.floor(junkRnd() * 6);
         const jx = (bx * BLOCK + lx) * CELL + 0.8 + junkRnd() * 2.4;
@@ -388,20 +420,44 @@ export class World {
             box.rotation.y = junkRnd() * Math.PI;
             group.add(box);
           }
-        } else if (kind < 0.75) {
+        } else if (kind < 0.62) {
           // papers on the damp carpet
           const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.7 + junkRnd() * 0.7, 0.5 + junkRnd() * 0.5),
             new THREE.MeshStandardMaterial({ color: 0xb5ad95, roughness: 1 }));
           paper.rotation.set(-Math.PI / 2, 0, junkRnd() * Math.PI);
           paper.position.set(jx, 0.012, jz);
           group.add(paper);
-        } else {
+        } else if (kind < 0.78) {
           // a chair, knocked over long ago
           const chair = new THREE.Mesh(this.wallGeo, this.mats.desk);
           chair.scale.set(0.45, 0.08, 0.5);
           chair.position.set(jx, 0.25, jz);
           chair.rotation.set(junkRnd() * 0.6 + 1.2, junkRnd() * Math.PI, 0);
           group.add(chair);
+        } else if (kind < 0.9) {
+          // a dead office plant, still in its pot
+          const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.28, 8),
+            new THREE.MeshStandardMaterial({ color: 0x6e4a32, roughness: 0.9 }));
+          pot.position.set(jx, 0.14, jz);
+          group.add(pot);
+          for (let s = 0; s < 4; s++) {
+            const stem = new THREE.Mesh(this.wallGeo,
+              new THREE.MeshStandardMaterial({ color: 0x4a422a, roughness: 1 }));
+            stem.scale.set(0.02, 0.4 + junkRnd() * 0.25, 0.02);
+            stem.position.set(jx + (junkRnd() - 0.5) * 0.1, 0.45, jz + (junkRnd() - 0.5) * 0.1);
+            stem.rotation.set((junkRnd() - 0.5) * 0.9, 0, (junkRnd() - 0.5) * 0.9);
+            group.add(stem);
+          }
+        } else {
+          // a water cooler. empty, obviously.
+          const base = new THREE.Mesh(this.wallGeo, this.mats.desk);
+          base.scale.set(0.34, 1.0, 0.34);
+          base.position.set(jx, 0.5, jz);
+          group.add(base);
+          const jug = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.4, 10),
+            new THREE.MeshStandardMaterial({ color: 0x9fc8d8, roughness: 0.2, transparent: true, opacity: 0.7 }));
+          jug.position.set(jx, 1.2, jz);
+          group.add(jug);
         }
       }
     }
@@ -445,6 +501,39 @@ export class World {
       bottle.position.set(aw.x, 0, aw.z);
       group.add(bottle);
       almond = { id: aw.id, mesh: bottle };
+    }
+
+    // pool blocks hold standing water in the poolrooms and during THE FLOOD
+    if (arch === 'pool' && this.wet) {
+      const waterTex = tx.poolTileTex();
+      waterTex.repeat.set(3, 3);
+      const water = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
+        new THREE.MeshStandardMaterial({
+          map: waterTex, color: 0x3e7a8a, transparent: true, opacity: 0.34,
+          roughness: 0.05, metalness: 0.4,
+        }));
+      water.rotation.x = -Math.PI / 2;
+      water.position.set(ox + size / 2, 0.07, oz + size / 2);
+      group.add(water);
+      this.waterMeshes.push(water);
+    }
+
+    // faded posters on room walls — someone tried to keep morale up
+    if (arch === 'rooms') {
+      let posters = junkRnd() < 0.5 ? 1 : 0;
+      for (let lz = 1; lz < BLOCK && posters > 0; lz++) {
+        for (let lx = 1; lx < BLOCK && posters > 0; lx++) {
+          const x = bx * BLOCK + lx, z = bz * BLOCK + lz;
+          if (wallN(seed, x, z) === 2 && junkRnd() < 0.12) {
+            const poster = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 1.05),
+              new THREE.MeshStandardMaterial({ map: tx.posterTex(), roughness: 0.95 }));
+            poster.position.set(x * CELL + CELL / 2, 1.6, z * CELL + WALL_HALF_T + 0.02);
+            poster.rotation.z = (junkRnd() - 0.5) * 0.12; // hung crooked, of course
+            group.add(poster);
+            posters--;
+          }
+        }
+      }
     }
 
     if (arch === 'landmark') this.buildLandmark(group, bx, bz);
@@ -514,9 +603,18 @@ export class World {
       lever.position.set(cx + 0.2, 1.0, cz + 0.22);
       lever.rotation.x = reg?.collected ? 0.9 : -0.6;
       group.add(lever);
-      const light = new THREE.PointLight(reg?.collected ? 0x4dff88 : 0xffb347, 0.8, 10, 1.8);
+      const light = new THREE.PointLight(reg?.collected ? 0x4dff88 : 0xffb347, 1.4, 14, 1.6);
       light.position.set(cx, 2.0, cz + 0.5);
       group.add(light);
+      // beacon shaft: an amber column of charged air, visible through the fog
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.55, 0.85, WALL_H, 10, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: reg?.collected ? 0x2a6644 : 0xffb347, transparent: true, opacity: 0.06,
+          blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+        }));
+      shaft.position.set(cx, WALL_H / 2, cz);
+      group.add(shaft);
       if (reg) { reg.lever = lever; reg.strip = strip; reg.light = light; }
       return;
     }
@@ -558,7 +656,14 @@ export class World {
         new THREE.MeshBasicMaterial({ map: tx.chalkWriting('NOT AN EXIT'), transparent: true, depthWrite: false }));
       sign.position.set(cx, 1.35, cz + 0.06);
       group.add(sign);
+      // behind it: bricks. it warned you.
+      const brick = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 2.2),
+        new THREE.MeshStandardMaterial({ map: tx.brickTex(), roughness: 0.95, side: THREE.DoubleSide }));
+      brick.position.set(cx, 1.05, cz - 0.06);
+      brick.visible = false;
+      group.add(brick);
       this.wallsRaycast.push(slab);
+      this.doors.push({ x: cx, z: cz, slab, brick, opened: false });
       return;
     }
     if (kind === 'chair') {

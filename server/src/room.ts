@@ -37,6 +37,7 @@ export class Room {
   marks: Mark[] = [];
   taken = new Set<string>();
   breakers = new Set<string>();
+  intel = new Set<string>();
   entity = new Entity();
   status: 'playing' | 'won' | 'wiped' = 'playing';
   private createdAt = Date.now();
@@ -163,6 +164,17 @@ export class Room {
         if (!target || !target.downed) return;
         if (msg.on === true && p.alive && !p.downed) target.revivers.add(p.id);
         else target.revivers.delete(p.id);
+        break;
+      }
+      case 'mark': {
+        // shared intel: first player near a breaker/exit marks it for the crew
+        const kind = msg.kind === 'exit' ? 'exit' : 'breaker';
+        const id = String(msg.id);
+        const key = `${kind}:${id}`;
+        if (this.intel.has(key)) return;
+        if (kind === 'breaker' && !breakerSpots(this.seed).some((b) => b.id === id)) return;
+        this.intel.add(key);
+        this.broadcast({ t: 'marked', kind, id, by: p.id });
         break;
       }
       case 'drink': {
@@ -304,6 +316,7 @@ export class Room {
     this.marks = [];
     this.taken.clear();
     this.breakers.clear();
+    this.intel.clear();
     this.entity.reset();
     this.status = 'playing';
     this.roundStart = Date.now();

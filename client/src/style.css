@@ -132,7 +132,7 @@ label.chk { display: flex; gap: 8px; align-items: center; color: var(--dim); fon
 #team .tm.down { color: #ff6b5a; animation: flick 1.2s infinite; }
 #team .tm.echo { color: rgba(150, 145, 130, 0.5); }
 #sanitybar {
-  position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 46px; left: 50%; transform: translateX(-50%);
   width: 120px; height: 3px; background: rgba(0, 0, 0, 0.5);
   opacity: 0; transition: opacity 0.6s;
 }
