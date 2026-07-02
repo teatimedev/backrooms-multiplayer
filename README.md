@@ -1,10 +1,15 @@
 # THE BACKROOMS: MULTIPLAYER
 
+**▶ PLAY NOW: https://backrooms-beryl.vercel.app** — host a session, send the
+code to friends. (Game server: `backrooms-mp.fly.dev`, sleeps when idle; the
+first connect of the day may take a few seconds to wake it.)
+
 A browser-based co-op horror game. You and up to 7 friends have noclipped into
 an infinite, procedurally generated labyrinth of mono-yellow office rooms.
-Find each other. Find the way out. Leave **together** — the exit only opens
-when every living player stands in it. Something in the walls hunts whoever
-wanders off alone.
+Find each other. Pull the **three breaker panels** to power the dead exit.
+Leave **together** — the doorway only counts if every living player stands in
+it. Something in the walls hunts whoever wanders off alone, it gets angry when
+the power comes on, and the only thing it hates is your flashlight.
 
 Everything — textures, audio, the maze itself — is generated procedurally at
 runtime. There are no asset downloads; the whole game is ~150 kB gzipped.
@@ -29,6 +34,9 @@ code and **JOIN**. You'll spawn scattered in the same maze — go find yourself.
 |---|---|
 | **The code** | Seeds the world. Everyone with the same code generates the *identical* infinite maze, deterministically. |
 | **The entity** | Server-controlled. It always targets the player who is **furthest from the group**. Stick together and it circles; split up and it commits. Lights die around it. |
+| **Breakers** | Three panels, scattered in different directions (they spit audible sparks). `E` to pull. All three → the exit powers on → the entity stops being patient. Split up to cover ground, or stay safe and slow? |
+| **The light** | Hold your flashlight beam on the entity: it slows. Keep it lit up during a hunt for a few seconds: it flees shrieking. Your only weapon. |
+| **Glimpses** | Sometimes it's just… standing there, far down a hall. Sometimes it isn't there at all. Low sanity blurs the difference. |
 | **Chalk** (hold `C`, flick mouse, release) | Draw arrows/symbols on walls and floors. Synced to everyone, persistent for the session. Navigate — or gaslight. |
 | **Mental map** (hold `TAB`) | A chalk sketch of everywhere *you* have personally been. Teammates show as colored dots. |
 | **Almond water** | Restores sanity and gives you an 8-second sense of the exit's direction (check your map). |
@@ -42,10 +50,27 @@ Controls: `WASD` move · `SHIFT` sprint (stamina) · `F` flashlight (echo: light
 
 ## Deploying it for your friends
 
-The whole game — static client **and** WebSocket rooms — is one Node process,
-so you deploy exactly one thing. No database, no environment variables.
+**It's already deployed** (see the top). The current production setup:
 
-### Render (recommended, free)
+- **Game server** (rooms + entity + a fallback copy of the client) on Fly.io:
+  app `backrooms-mp`, region `lhr`, scale-to-zero. Update with:
+  ```bash
+  fly deploy
+  ```
+- **Client** on Vercel (project `backrooms` → backrooms-beryl.vercel.app),
+  built against the Fly WebSocket URL. Update with:
+  ```bash
+  cd client && VITE_WS_URL=wss://backrooms-mp.fly.dev/ws npx vite build
+  rm -rf ../.deploy-vercel && mkdir ../.deploy-vercel && cp -r dist/* ../.deploy-vercel/
+  cd ../.deploy-vercel && vercel deploy --prod --yes
+  ```
+  (https://backrooms-mp.fly.dev also serves the game directly if Vercel is ever down.)
+
+If you'd rather run it elsewhere, the whole game — static client **and**
+WebSocket rooms — is one Node process, so you deploy exactly one thing.
+No database, no required environment variables.
+
+### Render (single-service alternative, free)
 
 1. Push this folder to a GitHub repo.
 2. Go to [render.com](https://render.com) → **New → Web Service** → pick the repo.
