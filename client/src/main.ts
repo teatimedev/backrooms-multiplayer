@@ -9,7 +9,7 @@ ui.showTitle();
 let game: Game | null = null;
 
 ui.onIntent = async (intent) => {
-  ui.showLoading('DESCENDING…');
+  ui.showLoading('DESCENDING…<br/><span style="font-size:11px;opacity:0.6">if the server is asleep this can take a few seconds</span>');
   const net = new Net();
   try {
     await net.connect();

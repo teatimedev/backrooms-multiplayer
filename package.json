@@ -2,7 +2,10 @@
   "name": "backrooms-multiplayer",
   "private": true,
   "version": "1.0.0",
-  "workspaces": ["server", "client"],
+  "workspaces": [
+    "server",
+    "client"
+  ],
   "scripts": {
     "dev": "concurrently -k -n srv,web -c yellow,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w client",
@@ -11,6 +14,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
+    "esbuild": "^0.28.1",
     "typescript": "^5.6.3"
   }
 }
