@@ -56,6 +56,8 @@ export class Game {
   private reviveTargetId: string | null = null;
   private lastRpAt = 0;
   private hemi: THREE.HemisphereLight;
+  private depth = 0;
+  private bottles = 0;
   private radialHeld = false;
   private radialVec = { x: 0, y: 0 };
   private radialSel = 0;
@@ -77,6 +79,8 @@ export class Game {
     // lives in fog, flicker and grain, not shadows.
     this.renderer.shadowMap.enabled = false;
     this.renderer.domElement.className = 'game';
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.18;
     ui.root.prepend(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(74, innerWidth / innerHeight, 0.05, 90);
@@ -85,7 +89,8 @@ export class Game {
     this.hemi = new THREE.HemisphereLight(0x8a7c4d, 0x2e2410, 0.85);
     this.scene.add(this.hemi);
 
-    this.world = new World(this.scene, this.seed, joined.taken, joined.breakers);
+    this.depth = joined.depth;
+    this.world = new World(this.scene, this.seed, joined.taken, joined.breakers, this.depth);
     this.lights = new LightPool(this.scene);
     this.player = new Player(this.camera, this.seed, this.scene);
     this.player.spawn(joined.spawn[0], joined.spawn[1]);
@@ -94,6 +99,7 @@ export class Game {
     };
     this.entity = new EntityView(this.scene);
     this.glimpse = new EntityView(this.scene); // sanity's borrowed silhouette
+    this.applyTheme();
     this.fx = new FX(this.renderer, this.scene, this.camera);
     this.chalk = new ChalkSystem(this.scene);
     this.chalk.setAll(joined.marks);
@@ -131,12 +137,25 @@ export class Game {
     (window as unknown as Record<string, unknown>).__game = this;
   }
 
+  private applyTheme(): void {
+    const t = this.world.theme;
+    (this.scene.fog as THREE.FogExp2).color.setHex(t.fogColor);
+    (this.scene.fog as THREE.FogExp2).density = t.fogDensity;
+    this.scene.background = new THREE.Color(t.fogColor).multiplyScalar(0.4);
+    this.hemi.color.setHex(t.hemiSky);
+    this.hemi.groundColor.setHex(t.hemiGround);
+    this.hemi.intensity = t.hemiIntensity;
+    this.entity.setDepth(this.depth);
+    this.glimpse.setDepth(this.depth);
+  }
+
   private refreshObjective(): void {
+    const t = this.world.theme;
     const left = [...this.world.breakers.values()].filter((b) => !b.collected).length;
     if (this.world.powered) {
-      this.ui.setObjective('the exit is LIVE — get everyone there, together');
+      this.ui.setObjective(`${t.name} — the exit is LIVE, get everyone there together`);
     } else {
-      this.ui.setObjective(`restore power: ${BREAKERS_NEEDED - left}/${BREAKERS_NEEDED} breakers pulled · stay close or split up?`);
+      this.ui.setObjective(`${t.name} — restore power: ${BREAKERS_NEEDED - left}/${BREAKERS_NEEDED} breakers`);
     }
   }
 
@@ -172,23 +191,12 @@ export class Game {
       this.world.takePickup(m.id);
       if (m.by === this.myId) {
         this.audio.pickup();
-        this.player.sanity = 100;
-        // the water shows you the current: nearest live breaker, or the exit
-        let tx = this.world.exit.x, tz = this.world.exit.z, what = 'the way out';
-        if (!this.world.powered) {
-          let best = Infinity;
-          for (const b of this.world.breakers.values()) {
-            if (b.collected) continue;
-            const d = Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z);
-            if (d < best) { best = d; tx = b.x; tz = b.z; what = 'a breaker'; }
-          }
+        if (this.player.sanity > 82 && this.bottles < 2) {
+          this.bottles++;
+          this.ui.toast(`almond water stashed (${this.bottles}) — Q to drink`);
+        } else {
+          this.drink();
         }
-        this.map.pulse = {
-          angle: Math.atan2(tz - this.player.pos.z, tx - this.player.pos.x),
-          until: performance.now() / 1000 + 8,
-        };
-        this.exitSense = 8;
-        this.ui.toast(`almond water — you can feel ${what}. hold TAB.`);
       } else {
         this.ui.toast(`${this.names.get(m.by) ?? 'someone'} found almond water`);
       }
@@ -280,9 +288,15 @@ export class Game {
       this.fx.flash = 1.4;
       const mins = Math.floor(m.time / 60), secs = m.time % 60;
       document.exitPointerLock();
-      setTimeout(() => this.ui.showEnd('win',
-        `everyone stepped through together.<br/>${mins}m ${secs}s in the yellow.`,
-        () => this.net.send({ t: 'restart' }), () => location.reload()), 900);
+      if (m.final) {
+        setTimeout(() => this.ui.showEnd('final',
+          `you went all the way down — and came out the other side.<br/>${mins}m ${secs}s in the poolrooms. it will remember you.`,
+          () => this.net.send({ t: 'restart' }), () => location.reload()), 900);
+      } else {
+        setTimeout(() => this.ui.showEnd('win',
+          `everyone stepped through together — ${mins}m ${secs}s.<br/>but the door doesn't go OUT. it goes DOWN.`,
+          () => this.net.send({ t: 'descend' }), () => location.reload()), 900);
+      }
     });
     net.on('wipe', (m) => {
       this.ended = true;
@@ -292,21 +306,24 @@ export class Game {
         `the backrooms kept every one of you.<br/>you lasted ${mins}m ${secs}s. only echoes remain.`,
         () => this.net.send({ t: 'restart' }), () => location.reload()), 1200);
     });
-    net.on('round', (m) => this.newRound(m.seed, m.spawn));
+    net.on('round', (m) => this.newRound(m.seed, m.spawn, m.depth));
     net.onclose = () => {
       if (!this.disposed) this.ui.showDisconnected();
     };
   }
 
-  private newRound(seed: number, spawn: [number, number]): void {
+  private newRound(seed: number, spawn: [number, number], depth: number): void {
     this.seed = seed;
+    this.depth = depth;
     this.ended = false;
+    this.bottles = 0;
     this.ui.closeOverlay();
     // tear down the old maze
     for (const key of [...this.world.chunks.keys()]) {
       this.scene.remove(this.world.chunks.get(key)!.group);
     }
-    this.world = new World(this.scene, seed, [], []);
+    this.world = new World(this.scene, seed, [], [], depth);
+    this.applyTheme();
     this.player.setSeed(seed);
     this.player.spawn(spawn[0], spawn[1]);
     this.chalk.setAll([]);
@@ -326,7 +343,9 @@ export class Game {
     for (const av of this.avatars.values()) av.alive = true;
     this.fx.fade = 0;
     this.refreshObjective();
-    this.ui.toast('a different maze. the same hum.', 4000);
+    this.ui.toast(depth > 0
+      ? `you fell through. ${this.world.theme.name}. it is faster down here.`
+      : 'a different maze. the same hum.', 5000);
     this.requestLock();
   }
 
@@ -427,6 +446,13 @@ export class Game {
           }
           break;
         }
+        case 'KeyQ':
+          if (this.player.alive && this.bottles > 0) {
+            this.bottles--;
+            this.audio.pickup();
+            this.drink();
+          }
+          break;
         case 'KeyV':
           if (this.player.alive && this.voice.enabled && !this.voice.talking) {
             this.voice.setTalking(true);
@@ -473,6 +499,33 @@ export class Game {
     });
 
     this.ui.onChat = (text) => this.net.send({ t: 'chat', text });
+  }
+
+  /** Drink almond water: full sanity + a pulse toward the current objective.
+      While bleeding out it stabilises you (server grants it once per down). */
+  private drink(): void {
+    this.player.sanity = 100;
+    let tx = this.world.exit.x, tz = this.world.exit.z, what = 'the way out';
+    if (!this.world.powered) {
+      let best = Infinity;
+      for (const b of this.world.breakers.values()) {
+        if (b.collected) continue;
+        const d = Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z);
+        if (d < best) { best = d; tx = b.x; tz = b.z; what = 'a breaker'; }
+      }
+    }
+    this.map.pulse = {
+      angle: Math.atan2(tz - this.player.pos.z, tx - this.player.pos.x),
+      until: performance.now() / 1000 + 8,
+    };
+    this.exitSense = 8;
+    if (this.player.downed) {
+      this.net.send({ t: 'drink' });
+      this.myDownedAt = Date.now(); // optimistic: server resets the same way
+      this.ui.toast('the water holds you together. for now.');
+    } else {
+      this.ui.toast(`almond water — you can feel ${what}. hold TAB.`);
+    }
   }
 
   private nearestDowned(range: number): string | null {
@@ -727,6 +780,7 @@ export class Game {
       this.ui.setPips(collected, BREAKERS_NEEDED);
       this.ui.setTimer((Date.now() - this.roundStartMs) / 1000);
       this.ui.setSanity(p.sanity);
+      this.ui.setBottles(this.bottles);
       const team = [{
         name: 'you', color: '#f5edd2',
         state: (!p.alive ? 'echo' : p.downed ? 'down' : 'alive') as 'alive' | 'down' | 'echo',

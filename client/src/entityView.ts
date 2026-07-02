@@ -51,6 +51,13 @@ export class EntityView {
     scene.add(this.group);
   }
 
+  /** Deeper levels: it burns hotter and stands taller. */
+  setDepth(depth: number): void {
+    const colors = [0xffefaf, 0xffb36a, 0xff4530];
+    ((this.eyeL.material) as THREE.MeshBasicMaterial).color.setHex(colors[Math.min(depth, 2)]);
+    this.group.scale.setScalar(1 + Math.min(depth, 2) * 0.07);
+  }
+
   sync(e: EntityTuple | null): void {
     if (!e) {
       if (this.active) this.active = false;

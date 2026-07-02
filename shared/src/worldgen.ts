@@ -14,7 +14,7 @@ export const LOW_WALL_H = 1.35;   // cubicle partitions
 export const WALL_HALF_T = 0.14;
 export const PLAYER_R = 0.35;
 
-export type Archetype = 'plain' | 'rooms' | 'pillars' | 'cubicles' | 'pool' | 'landmark';
+export type Archetype = 'plain' | 'rooms' | 'corridors' | 'pillars' | 'cubicles' | 'storage' | 'pool' | 'landmark';
 export type LandmarkKind = 'chair' | 'cabinets' | 'writing' | 'shrine' | 'vending' | 'door' | 'breaker' | 'exit';
 
 /** Breaker panels that must all be pulled before the exit has power. */
@@ -86,11 +86,13 @@ export function blockArchetype(seed: number, bx: number, bz: number): Archetype 
   if (bx === l.exit.bx && bz === l.exit.bz) return 'landmark';
   if (l.breakers.some((b) => b.bx === bx && b.bz === bz)) return 'landmark';
   const r = r2(seed, bx, bz, 7);
-  if (r < 0.30) return 'plain';
-  if (r < 0.60) return 'rooms';
-  if (r < 0.76) return 'pillars';
-  if (r < 0.87) return 'cubicles';
-  if (r < 0.945) return 'pool';
+  if (r < 0.20) return 'plain';
+  if (r < 0.42) return 'rooms';
+  if (r < 0.54) return 'corridors';
+  if (r < 0.66) return 'pillars';
+  if (r < 0.76) return 'cubicles';
+  if (r < 0.85) return 'storage';
+  if (r < 0.92) return 'pool';
   return 'landmark';
 }
 
@@ -113,22 +115,40 @@ export function blockDark(seed: number, bx: number, bz: number): boolean {
 
 /** Wall on the north edge of cell (x,z) — between (x,z) and (x,z-1). */
 export function wallN(seed: number, x: number, z: number): number {
-  if (isHall(x, z) || isHall(x, z - 1)) return 0;
+  if (isHall(x, z) || isHall(x, z - 1)) {
+    // rare collapses across hall corridors — the lattice can't be trusted.
+    // never at intersections, so global connectivity survives.
+    if (mod(x, BLOCK) === 0 && mod(z, BLOCK) >= 2 && r2(seed, x, z, 11) < 0.05) return 2;
+    return 0;
+  }
   const bx = Math.floor(x / BLOCK), bz = Math.floor(z / BLOCK);
   const a = blockArchetype(seed, bx, bz);
   if (a === 'rooms') return r2(seed, x, z, 1) < 0.44 ? 2 : 0;
+  if (a === 'corridors') return r2(seed, x, z, 1) > 0.18 ? 2 : 0;
   if (a === 'cubicles') return r2(seed, x, z, 1) < 0.52 ? 1 : 0;
   return 0;
 }
 
 /** Wall on the west edge of cell (x,z) — between (x,z) and (x-1,z). */
 export function wallW(seed: number, x: number, z: number): number {
-  if (isHall(x, z) || isHall(x - 1, z)) return 0;
+  if (isHall(x, z) || isHall(x - 1, z)) {
+    if (mod(z, BLOCK) === 0 && mod(x, BLOCK) >= 2 && r2(seed, x, z, 12) < 0.05) return 2;
+    return 0;
+  }
   const bx = Math.floor(x / BLOCK), bz = Math.floor(z / BLOCK);
   const a = blockArchetype(seed, bx, bz);
   if (a === 'rooms') return r2(seed, x, z, 2) < 0.44 ? 2 : 0;
+  if (a === 'corridors') return r2(seed, x, z, 2) < 0.10 ? 2 : 0;
   if (a === 'cubicles') return r2(seed, x, z, 2) < 0.52 ? 1 : 0;
   return 0;
+}
+
+/** Storage blocks: shelf units filling the cell, aisles between. Solid. */
+export function shelfAt(seed: number, x: number, z: number): boolean {
+  if (isHall(x, z)) return false;
+  const bx = Math.floor(x / BLOCK), bz = Math.floor(z / BLOCK);
+  if (blockArchetype(seed, bx, bz) !== 'storage') return false;
+  return mod(z, 2) === 1 && mod(x, 4) !== 0 && r2(seed, x, z, 13) < 0.92;
 }
 
 export function pillarAt(seed: number, x: number, z: number): boolean {
@@ -217,6 +237,10 @@ export function resolveCollision(seed: number, px: number, pz: number, r: number
           const mx = gx * CELL + CELL / 2, mz = gz * CELL + CELL / 2;
           [px, pz] = pushCircleAABB(px, pz, r, mx - 0.35, mz - 0.35, mx + 0.35, mz + 0.35);
         }
+        if (shelfAt(seed, gx, gz)) {
+          const mx = gx * CELL + CELL / 2, mz = gz * CELL + CELL / 2;
+          [px, pz] = pushCircleAABB(px, pz, r, mx - 1.85, mz - 0.4, mx + 1.85, mz + 0.4);
+        }
       }
     }
   }
@@ -251,8 +275,9 @@ export function losBlocked(seed: number, ax: number, az: number, bx: number, bz:
   return false;
 }
 
-/** Can an agent step from cell a to adjacent cell b? Full walls block; low walls block players but the entity climbs them (pass entity=true). */
+/** Can an agent step from cell a to adjacent cell b? Full walls block; low walls block players but the entity climbs them (pass entity=true). Shelf cells are solid for everyone. */
 export function cellBlocked(seed: number, ax: number, az: number, bx: number, bz: number, entity = false): boolean {
+  if (shelfAt(seed, bx, bz)) return true;
   const min = entity ? 2 : 1; // wall level that blocks
   if (bz === az - 1 && bx === ax) return wallN(seed, ax, az) >= min;
   if (bz === az + 1 && bx === ax) return wallN(seed, ax, az + 1) >= min;

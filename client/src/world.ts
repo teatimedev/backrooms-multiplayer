@@ -4,8 +4,8 @@
 import * as THREE from 'three';
 import {
   BLOCK, CELL, WALL_H, LOW_WALL_H, WALL_HALF_T,
-  blockArchetype, blockDark, landmarkKind, wallN, wallW, pillarAt,
-  fixtureAt, fixtureDead, almondAt, exitPos, breakerSpots,
+  blockArchetype, blockDark, landmarkKind, wallN, wallW, pillarAt, shelfAt,
+  fixtureAt, fixtureDead, almondAt, exitPos, breakerSpots, mod,
 } from '@shared/worldgen';
 import { hash2, rand01, mulberry32 } from '@shared/rng';
 import * as tx from './textures';
@@ -13,14 +13,44 @@ import * as tx from './textures';
 const LOAD_R = 2;    // blocks
 const UNLOAD_R = 4;
 
-export interface Fixture { x: number; z: number; dead: boolean; phase: number }
+/** Visual identity per descent level. Geometry is untouched — only skin. */
+export interface Theme {
+  name: string;
+  fixture: number;        // light colour
+  fogColor: number; fogDensity: number;
+  hemiSky: number; hemiGround: number; hemiIntensity: number;
+  wallsAre: 'wallpaper' | 'concrete' | 'pool';
+  floorsAre: 'carpet' | 'concrete' | 'pool';
+}
+
+export const THEMES: Theme[] = [
+  { name: 'LEVEL 0', fixture: 0xfff0bd, fogColor: 0x241d0e, fogDensity: 0.05, hemiSky: 0x8a7c4d, hemiGround: 0x2e2410, hemiIntensity: 0.85, wallsAre: 'wallpaper', floorsAre: 'carpet' },
+  { name: 'LEVEL 1 · THE GARAGE', fixture: 0xffc98a, fogColor: 0x191410, fogDensity: 0.058, hemiSky: 0x6a5a42, hemiGround: 0x1c1712, hemiIntensity: 0.7, wallsAre: 'concrete', floorsAre: 'concrete' },
+  { name: 'THE POOLROOMS', fixture: 0xd8f2ff, fogColor: 0x13232a, fogDensity: 0.045, hemiSky: 0x6e8f9c, hemiGround: 0x14262c, hemiIntensity: 0.8, wallsAre: 'pool', floorsAre: 'pool' },
+];
+
+export interface Fixture { x: number; z: number; dead: boolean; phase: number; cool: boolean }
 interface FlickerEvent { x: number; z: number; r: number; t0: number }
 
 interface Chunk {
   group: THREE.Group;
   fixtures: Fixture[];
   fixtureMesh: THREE.InstancedMesh | null;
+  glowMesh: THREE.InstancedMesh | null;
   almond: { id: string; mesh: THREE.Group } | null;
+}
+
+function glowTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,255,255,0.85)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.28)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
 }
 
 export interface Breaker {
@@ -47,16 +77,21 @@ export class World {
   powered = false;
   blackoutUntil = 0;
 
+  theme: Theme;
+  depth: number;
   private mats: Record<string, THREE.Material>;
   private wallGeo = new THREE.BoxGeometry(1, 1, 1);
   private fixtureGeo = new THREE.BoxGeometry(1.7, 0.09, 0.55);
+  private glowGeo = new THREE.PlaneGeometry(3.4, 3.4);
   private wallsRaycast: THREE.Object3D[] = [];
   private tmpM = new THREE.Matrix4();
   private tmpC = new THREE.Color();
 
-  constructor(scene: THREE.Scene, seed: number, taken: string[], collectedBreakers: string[] = []) {
+  constructor(scene: THREE.Scene, seed: number, taken: string[], collectedBreakers: string[] = [], depth = 0) {
     this.scene = scene;
     this.seed = seed;
+    this.depth = depth;
+    this.theme = THEMES[Math.min(depth, THEMES.length - 1)];
     this.taken = new Set(taken);
     this.exit = exitPos(seed);
     const collected = new Set(collectedBreakers);
@@ -64,15 +99,31 @@ export class World {
       this.breakers.set(b.id, { id: b.id, x: b.x, z: b.z, collected: collected.has(b.id), lever: null, strip: null, light: null });
     }
     this.powered = collected.size >= 3;
+    const wallpaper = new THREE.MeshStandardMaterial({ map: tx.wallpaperTex(), roughness: 0.92 });
+    const concrete = new THREE.MeshStandardMaterial({ map: tx.concreteTex(), roughness: 0.85 });
+    const pool = new THREE.MeshStandardMaterial({ map: tx.poolTileTex(), roughness: 0.3, metalness: 0.06 });
+    const carpet = new THREE.MeshStandardMaterial({ map: tx.carpetTex(), roughness: 1 });
+    const t = this.theme;
     this.mats = {
-      wall: new THREE.MeshStandardMaterial({ map: tx.wallpaperTex(), roughness: 0.92 }),
-      carpet: new THREE.MeshStandardMaterial({ map: tx.carpetTex(), roughness: 1 }),
-      ceiling: new THREE.MeshStandardMaterial({ map: tx.ceilingTex(), roughness: 0.95 }),
-      concrete: new THREE.MeshStandardMaterial({ map: tx.concreteTex(), roughness: 0.85 }),
-      pool: new THREE.MeshStandardMaterial({ map: tx.poolTileTex(), roughness: 0.35, metalness: 0.05 }),
-      cubicle: new THREE.MeshStandardMaterial({ map: tx.cubicleTex(), roughness: 1 }),
+      wall: t.wallsAre === 'wallpaper' ? wallpaper : t.wallsAre === 'concrete' ? concrete : pool,
+      carpet: t.floorsAre === 'carpet' ? carpet : t.floorsAre === 'concrete' ? concrete : pool,
+      ceiling: t.wallsAre === 'pool' ? pool : t.wallsAre === 'concrete'
+        ? new THREE.MeshStandardMaterial({ map: tx.concreteTex(), roughness: 0.9, color: 0x9a9a9a })
+        : new THREE.MeshStandardMaterial({ map: tx.ceilingTex(), roughness: 0.95 }),
+      concrete,
+      pool,
+      cubicle: t.wallsAre === 'wallpaper'
+        ? new THREE.MeshStandardMaterial({ map: tx.cubicleTex(), roughness: 1 })
+        : concrete,
       fixture: new THREE.MeshBasicMaterial({ color: 0xffffff }),
+      glow: new THREE.MeshBasicMaterial({
+        map: glowTexture(), transparent: true, blending: THREE.AdditiveBlending,
+        depthWrite: false, side: THREE.DoubleSide,
+      }),
       dark: new THREE.MeshStandardMaterial({ color: 0x14120c, roughness: 0.9 }),
+      base: new THREE.MeshStandardMaterial({ color: 0x2a2317, roughness: 0.85 }),
+      junk: new THREE.MeshStandardMaterial({ color: 0x5c4f38, roughness: 0.95 }),
+      desk: new THREE.MeshStandardMaterial({ color: 0x4a4034, roughness: 0.7 }),
     };
   }
 
@@ -115,12 +166,19 @@ export class World {
       if (Math.max(Math.abs(bx - pbx), Math.abs(bz - pbz)) > 1) continue;
       for (const f of chunk.fixtures) if (!f.dead) this.fixturesNear.push(f);
       if (chunk.fixtureMesh) {
+        const base = new THREE.Color(this.theme.fixture);
+        const cool = new THREE.Color(0xd8f2ff);
         chunk.fixtures.forEach((f, i) => {
           const lvl = f.dead ? 0.02 : this.lightLevel(f, time);
-          this.tmpC.setRGB(lvl, lvl * 0.96, lvl * 0.8);
+          this.tmpC.copy(f.cool ? cool : base).multiplyScalar(lvl);
           chunk.fixtureMesh!.setColorAt(i, this.tmpC);
+          if (chunk.glowMesh) {
+            this.tmpC.multiplyScalar(lvl * 0.85);
+            chunk.glowMesh.setColorAt(i, this.tmpC);
+          }
         });
         chunk.fixtureMesh.instanceColor!.needsUpdate = true;
+        if (chunk.glowMesh) chunk.glowMesh.instanceColor!.needsUpdate = true;
       }
     }
     if (this.exitLight) {
@@ -194,7 +252,11 @@ export class World {
     const ox = bx * BLOCK * CELL, oz = bz * BLOCK * CELL;
     const size = BLOCK * CELL;
 
-    const floorMat = arch === 'pool' ? this.mats.pool : arch === 'landmark' ? this.mats.concrete : this.mats.carpet;
+    // per-chunk tint clones kill the texture-repeat shimmer
+    const tint = 0.9 + rand01(hash2(seed, bx, bz, 51)) * 0.2;
+    const floorBase = arch === 'pool' ? this.mats.pool : arch === 'landmark' ? this.mats.concrete : this.mats.carpet;
+    const floorMat = (floorBase as THREE.MeshStandardMaterial).clone();
+    floorMat.color.multiplyScalar(tint);
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(size, size), floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(ox + size / 2, 0, oz + size / 2);
@@ -202,7 +264,9 @@ export class World {
     group.add(floor);
     this.wallsRaycast.push(floor);
 
-    const ceilMat = arch === 'pool' ? this.mats.pool : this.mats.ceiling;
+    const ceilBase = arch === 'pool' ? this.mats.pool : this.mats.ceiling;
+    const ceilMat = (ceilBase as THREE.MeshStandardMaterial).clone();
+    ceilMat.color.multiplyScalar(0.85 + rand01(hash2(seed, bx, bz, 52)) * 0.2);
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(size, size), ceilMat);
     ceil.rotation.x = Math.PI / 2;
     ceil.position.set(ox + size / 2, WALL_H, oz + size / 2);
@@ -213,8 +277,11 @@ export class World {
     const full: THREE.Matrix4[] = [];
     const low: THREE.Matrix4[] = [];
     const pillars: THREE.Matrix4[] = [];
+    const shelves: THREE.Matrix4[] = [];
+    const bases: THREE.Matrix4[] = [];
     const fixtures: Fixture[] = [];
     const t2 = WALL_HALF_T * 2;
+    const isCool = arch === 'pool';
 
     for (let lz = 0; lz < BLOCK; lz++) {
       for (let lx = 0; lx < BLOCK; lx++) {
@@ -227,6 +294,10 @@ export class World {
             new THREE.Quaternion(),
             new THREE.Vector3(CELL + t2, h, t2));
           (wn === 2 ? full : low).push(m);
+          if (wn === 2) bases.push(new THREE.Matrix4().compose(
+            new THREE.Vector3(x * CELL + CELL / 2, 0.07, z * CELL),
+            new THREE.Quaternion(),
+            new THREE.Vector3(CELL + t2, 0.14, t2 + 0.05)));
         }
         const ww = wallW(seed, x, z);
         if (ww > 0) {
@@ -236,6 +307,10 @@ export class World {
             new THREE.Quaternion(),
             new THREE.Vector3(t2, h, CELL + t2));
           (ww === 2 ? full : low).push(m);
+          if (ww === 2) bases.push(new THREE.Matrix4().compose(
+            new THREE.Vector3(x * CELL, 0.07, z * CELL + CELL / 2),
+            new THREE.Quaternion(),
+            new THREE.Vector3(t2 + 0.05, 0.14, CELL + t2)));
         }
         if (pillarAt(seed, x, z)) {
           pillars.push(new THREE.Matrix4().compose(
@@ -243,11 +318,18 @@ export class World {
             new THREE.Quaternion(),
             new THREE.Vector3(0.7, WALL_H, 0.7)));
         }
+        if (shelfAt(seed, x, z)) {
+          shelves.push(new THREE.Matrix4().compose(
+            new THREE.Vector3(x * CELL + CELL / 2, 1.1, z * CELL + CELL / 2),
+            new THREE.Quaternion(),
+            new THREE.Vector3(3.7, 2.2, 0.8)));
+        }
         if (fixtureAt(seed, x, z)) {
           fixtures.push({
             x: x * CELL + CELL / 2, z: z * CELL + CELL / 2,
             dead: fixtureDead(seed, x, z),
             phase: rand01(hash2(seed, x, z, 6)),
+            cool: isCool,
           });
         }
       }
@@ -265,16 +347,95 @@ export class World {
     addInstanced(full, this.mats.wall, true);
     addInstanced(low, this.mats.cubicle, true);
     addInstanced(pillars, arch === 'pool' ? this.mats.pool : this.mats.wall, true);
+    addInstanced(shelves, this.mats.cubicle, true);
+    addInstanced(bases, this.mats.base, false, false);
 
     let fixtureMesh: THREE.InstancedMesh | null = null;
+    let glowMesh: THREE.InstancedMesh | null = null;
     if (fixtures.length) {
       fixtureMesh = new THREE.InstancedMesh(this.fixtureGeo, this.mats.fixture, fixtures.length);
+      glowMesh = new THREE.InstancedMesh(this.glowGeo, this.mats.glow, fixtures.length);
+      const flat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
       fixtures.forEach((f, i) => {
         this.tmpM.makeTranslation(f.x, WALL_H - 0.05, f.z);
         fixtureMesh!.setMatrixAt(i, this.tmpM);
         fixtureMesh!.setColorAt(i, this.tmpC.setRGB(0.9, 0.86, 0.7));
+        // additive halo hugging the ceiling under the tube
+        this.tmpM.compose(new THREE.Vector3(f.x, WALL_H - 0.12, f.z), flat, new THREE.Vector3(1, 1, 1));
+        glowMesh!.setMatrixAt(i, this.tmpM);
+        glowMesh!.setColorAt(i, this.tmpC.setRGB(0.5, 0.47, 0.35));
       });
-      group.add(fixtureMesh);
+      group.add(fixtureMesh, glowMesh);
+    }
+
+    // scattered junk: the backrooms are abandoned, not empty
+    const junkRnd = mulberry32(hash2(seed, bx, bz, 60));
+    if (arch !== 'landmark' && arch !== 'storage') {
+      const n = Math.floor(junkRnd() * 3);
+      for (let i = 0; i < n; i++) {
+        const lx = 1 + Math.floor(junkRnd() * 6), lz = 1 + Math.floor(junkRnd() * 6);
+        const jx = (bx * BLOCK + lx) * CELL + 0.8 + junkRnd() * 2.4;
+        const jz = (bz * BLOCK + lz) * CELL + 0.8 + junkRnd() * 2.4;
+        const kind = junkRnd();
+        if (kind < 0.5) {
+          // cardboard boxes, sagging
+          const stack = 1 + Math.floor(junkRnd() * 2);
+          for (let b = 0; b < stack; b++) {
+            const s = 0.45 + junkRnd() * 0.25;
+            const box = new THREE.Mesh(this.wallGeo, this.mats.junk);
+            box.scale.set(s, s * 0.8, s);
+            box.position.set(jx + (junkRnd() - 0.5) * 0.2, s * 0.4 + b * s * 0.78, jz + (junkRnd() - 0.5) * 0.2);
+            box.rotation.y = junkRnd() * Math.PI;
+            group.add(box);
+          }
+        } else if (kind < 0.75) {
+          // papers on the damp carpet
+          const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.7 + junkRnd() * 0.7, 0.5 + junkRnd() * 0.5),
+            new THREE.MeshStandardMaterial({ color: 0xb5ad95, roughness: 1 }));
+          paper.rotation.set(-Math.PI / 2, 0, junkRnd() * Math.PI);
+          paper.position.set(jx, 0.012, jz);
+          group.add(paper);
+        } else {
+          // a chair, knocked over long ago
+          const chair = new THREE.Mesh(this.wallGeo, this.mats.desk);
+          chair.scale.set(0.45, 0.08, 0.5);
+          chair.position.set(jx, 0.25, jz);
+          chair.rotation.set(junkRnd() * 0.6 + 1.2, junkRnd() * Math.PI, 0);
+          group.add(chair);
+        }
+      }
+    }
+
+    // cubicle farms get desks against some partitions
+    if (arch === 'cubicles') {
+      for (let i = 0; i < 5; i++) {
+        const lx = 1 + Math.floor(junkRnd() * 6), lz = 1 + Math.floor(junkRnd() * 6);
+        const x = bx * BLOCK + lx, z = bz * BLOCK + lz;
+        if (wallN(seed, x, z) !== 1) continue;
+        const desk = new THREE.Mesh(this.wallGeo, this.mats.desk);
+        desk.scale.set(1.7, 0.06, 0.75);
+        desk.position.set(x * CELL + CELL / 2, 0.74, z * CELL + 0.55);
+        group.add(desk);
+        if (junkRnd() < 0.5) {
+          const monitor = new THREE.Mesh(this.wallGeo, this.mats.dark);
+          monitor.scale.set(0.45, 0.35, 0.12);
+          monitor.position.set(x * CELL + CELL / 2 + (junkRnd() - 0.5), 0.98, z * CELL + 0.5);
+          monitor.rotation.y = (junkRnd() - 0.5) * 0.6;
+          group.add(monitor);
+        }
+      }
+    }
+
+    // dead blocks get one red emergency lamp — a colour that means wrong
+    if (blockDark(seed, bx, bz)) {
+      const cx = ox + size / 2, cz = oz + size / 2;
+      const lamp = new THREE.PointLight(0xff2a1a, 2.2, 17, 1.5);
+      lamp.position.set(cx, WALL_H - 0.4, cz);
+      group.add(lamp);
+      const lens = new THREE.Mesh(this.wallGeo, new THREE.MeshBasicMaterial({ color: 0xff3020 }));
+      lens.scale.set(0.22, 0.12, 0.22);
+      lens.position.set(cx, WALL_H - 0.1, cz);
+      group.add(lens);
     }
 
     let almond: Chunk['almond'] = null;
@@ -289,7 +450,7 @@ export class World {
     if (arch === 'landmark') this.buildLandmark(group, bx, bz);
 
     this.scene.add(group);
-    this.chunks.set(`${bx},${bz}`, { group, fixtures, fixtureMesh, almond });
+    this.chunks.set(`${bx},${bz}`, { group, fixtures, fixtureMesh, glowMesh, almond });
   }
 
   private buildBottle(): THREE.Group {
@@ -479,12 +640,15 @@ export class LightPool {
       .map((f) => ({ f, d: Math.hypot(f.x - px, f.z - pz) }))
       .filter((e) => e.d < 30)
       .sort((a, b) => a.d - b.d);
+    const base = new THREE.Color(world.theme.fixture);
+    const cool = new THREE.Color(0xd8f2ff);
     let hum = 0;
     for (let i = 0; i < this.lights.length; i++) {
       const l = this.lights[i];
       const e = sorted[i];
       if (!e) { l.intensity = 0; continue; }
       const lvl = world.lightLevel(e.f, time);
+      l.color.copy(e.f.cool ? cool : base);
       l.position.set(e.f.x, WALL_H - 0.3, e.f.z);
       l.intensity = 9.5 * lvl;
       hum += Math.max(0, 1 - e.d / 20) * lvl;

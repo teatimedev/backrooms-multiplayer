@@ -26,11 +26,13 @@ export interface Player {
   downedAt: number;
   reviveProgress: number;
   revivers: Set<string>;
+  selfSaved: boolean;
 }
 
 export class Room {
   seed: number;
   round = 1;
+  depth = 0; // 0 lobby · 1 garage · 2 poolrooms (escape there = out)
   players = new Map<string, Player>();
   marks: Mark[] = [];
   taken = new Set<string>();
@@ -59,13 +61,13 @@ export class Room {
       id, ws, name: name.slice(0, 16) || 'anon', color: color & 7,
       alive: this.status === 'playing', spawnIndex,
       state: [sp.x, 1.6, sp.z, 0, 0, 0], hasState: false, lastFlick: 0, shining: false,
-      downed: false, downedAt: 0, reviveProgress: 0, revivers: new Set(),
+      downed: false, downedAt: 0, reviveProgress: 0, revivers: new Set(), selfSaved: false,
     };
     this.players.set(id, p);
     this.emptySince = null;
     const info = (q: Player): PlayerInfo => ({ id: q.id, name: q.name, color: q.color, alive: q.alive, spawnIndex: q.spawnIndex });
     this.sendTo(id, {
-      t: 'joined', you: id, code: this.code, seed: this.seed, round: this.round,
+      t: 'joined', you: id, code: this.code, seed: this.seed, round: this.round, depth: this.depth,
       spawn: [sp.x, sp.z], players: [...this.players.values()].map(info),
       marks: this.marks, taken: [...this.taken], breakers: [...this.breakers],
     });
@@ -163,8 +165,23 @@ export class Room {
         else target.revivers.delete(p.id);
         break;
       }
+      case 'drink': {
+        // almond water while bleeding out stabilises you — once per down
+        if (p.downed && !p.selfSaved) {
+          p.selfSaved = true;
+          p.downedAt = Date.now();
+        }
+        break;
+      }
+      case 'descend': {
+        if (this.status !== 'won' || this.depth >= 2) return;
+        this.depth++;
+        this.newRound();
+        break;
+      }
       case 'restart': {
         if (this.status === 'playing' && this.ageSec() < 15) return;
+        this.depth = 0;
         this.newRound();
         break;
       }
@@ -172,6 +189,10 @@ export class Room {
         if (!process.env.BR_DEBUG) return;
         if (msg.cmd === 'spawn') this.entity.forceSpawn();
         if (msg.cmd === 'down') this.downPlayer(String(msg.id ?? p.id));
+        if (msg.cmd === 'win') {
+          this.status = 'won';
+          this.broadcast({ t: 'win', time: Math.round(this.ageSec()), final: this.depth >= 2 });
+        }
         break;
       }
       case 'ping':
@@ -187,6 +208,7 @@ export class Room {
     p.downed = true;
     p.downedAt = Date.now();
     p.reviveProgress = 0;
+    p.selfSaved = false;
     p.revivers.clear();
     this.broadcast({ t: 'down', id });
   }
@@ -272,7 +294,7 @@ export class Room {
     const allIn = alive.every((p) => Math.hypot(p.state[0] - ex.x, p.state[2] - ex.z) < EXIT_RADIUS);
     if (allIn) {
       this.status = 'won';
-      this.broadcast({ t: 'win', time: Math.round(this.ageSec()) });
+      this.broadcast({ t: 'win', time: Math.round(this.ageSec()), final: this.depth >= 2 });
     }
   }
 
@@ -295,7 +317,7 @@ export class Room {
       p.spawnIndex = i++;
       const sp = spawnPoint(this.seed, p.spawnIndex);
       p.state = [sp.x, 1.6, sp.z, 0, 0, 0];
-      this.sendTo(p.id, { t: 'round', seed: this.seed, round: this.round, spawn: [sp.x, sp.z] });
+      this.sendTo(p.id, { t: 'round', seed: this.seed, round: this.round, depth: this.depth, spawn: [sp.x, sp.z] });
     }
   }
 

@@ -155,6 +155,11 @@ label.chk { display: flex; gap: 8px; align-items: center; color: var(--dim); fon
   border-bottom: 15px solid #ff6b5a; filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.9));
 }
 #downarrow .dlabel { color: #ff6b5a; font-size: 12px; letter-spacing: 0.2em; text-shadow: 0 0 10px #000; }
+#bottles {
+  position: absolute; bottom: 30px; left: 36px;
+  color: #cfe3d8; font-size: 14px; letter-spacing: 0.2em; text-shadow: 0 0 8px #000;
+}
+#bottles .q { color: var(--dim); font-size: 11px; }
 #chatlog {
   position: absolute; bottom: 90px; left: 36px; width: 340px;
   display: flex; flex-direction: column; gap: 3px; font-size: 13px;

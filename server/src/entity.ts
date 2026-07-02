@@ -100,9 +100,9 @@ export class Entity {
     this.avoidUntil.set(id, Date.now() + secs * 1000);
   }
 
-  /** 0..1 appetite: round time + breakers pulled + previous takedowns. */
+  /** 0..1 appetite: round time + breakers pulled + previous takedowns + how deep you've gone. */
   private hungerOf(room: Room): number {
-    let h = room.ageSec() / 480 + room.breakers.size * 0.12 + this.kills * 0.1;
+    let h = room.ageSec() / 480 + room.breakers.size * 0.12 + this.kills * 0.1 + room.depth * 0.22;
     if (this.enraged) h = Math.max(h, 0.85);
     return Math.min(1, h);
   }
@@ -227,7 +227,7 @@ export class Entity {
 
     // ------------------------------------------------ peak: the hunt
     this.mode = 2;
-    const speed = (4.6 + hunger * 1.2) * (shined ? 0.5 : 1);
+    const speed = (4.6 + hunger * 1.2 + room.depth * 0.25) * (shined ? 0.5 : 1);
     this.moveToward(room, tx, tz, speed, dt, shined);
     if (dist < 1.5) { this.takedown(room, target, hunger); return; }
     // no progress? it doesn't walk around obstacles — it stops being where it was

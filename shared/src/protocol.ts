@@ -41,12 +41,14 @@ export type C2S =
   | { t: 'rtc'; to: string; data: unknown }
   | { t: 'flick' }
   | { t: 'revive'; id: string; on: boolean }
+  | { t: 'drink' }
+  | { t: 'descend' }
   | { t: 'restart' }
   | { t: 'dbg'; cmd: string; id?: string }
   | { t: 'ping'; n: number };
 
 export type S2C =
-  | { t: 'joined'; you: string; code: string; seed: number; round: number; spawn: [number, number]; players: PlayerInfo[]; marks: Mark[]; taken: string[]; breakers: string[] }
+  | { t: 'joined'; you: string; code: string; seed: number; round: number; depth: number; spawn: [number, number]; players: PlayerInfo[]; marks: Mark[]; taken: string[]; breakers: string[] }
   | { t: 'err'; msg: string }
   | { t: 'pj'; p: PlayerInfo }
   | { t: 'pl'; id: string; name: string }
@@ -64,9 +66,9 @@ export type S2C =
   | { t: 'chat'; from: string; name: string; text: string }
   | { t: 'flicker'; x: number; z: number; r: number }
   | { t: 'mimic'; x: number; z: number; kind: 'steps' | 'voice' }
-  | { t: 'win'; time: number }
+  | { t: 'win'; time: number; final: boolean }
   | { t: 'wipe'; time: number }
-  | { t: 'round'; seed: number; round: number; spawn: [number, number] }
+  | { t: 'round'; seed: number; round: number; depth: number; spawn: [number, number] }
   | { t: 'rtc'; from: string; data: unknown }
   | { t: 'pong'; n: number };
 

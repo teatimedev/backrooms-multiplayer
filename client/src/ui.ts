@@ -123,6 +123,7 @@ export class UI {
       <div id="revivebar"><div class="label"></div><div class="track"><div class="fill"></div></div></div>
       <div id="downarrow"><div class="tri"></div><div class="dlabel"></div></div>
       <div id="sanitybar"><div class="fill"></div></div>
+      <div id="bottles"></div>
       <div id="stamina"><div class="fill"></div></div>
       <div id="ptt">V — talk</div>
       <div id="toast"></div>
@@ -200,6 +201,13 @@ export class UI {
     if (!el) return;
     const html = list.map((p) =>
       `<div class="tm ${p.state}"><span class="dot" style="background:${p.color}"></span>${p.name}${p.state === 'down' ? ' — DOWN' : p.state === 'echo' ? ' — echo' : ''}</div>`).join('');
+    if (el.innerHTML !== html) el.innerHTML = html;
+  }
+
+  setBottles(n: number): void {
+    const el = this.hud?.querySelector('#bottles');
+    if (!el) return;
+    const html = n > 0 ? `${'▮'.repeat(n)} <span class="q">Q</span>` : '';
     if (el.innerHTML !== html) el.innerHTML = html;
   }
 
@@ -318,15 +326,17 @@ export class UI {
     (el.querySelector('#d-ok') as HTMLButtonElement).onclick = () => this.closeOverlay();
   }
 
-  showEnd(kind: 'win' | 'wipe', detail: string, onAgain: () => void, onLeave: () => void): void {
+  showEnd(kind: 'win' | 'wipe' | 'final', detail: string, onAgain: () => void, onLeave: () => void): void {
     this.closeOverlay();
+    const titles = { win: 'LEVEL CLEARED', wipe: 'NO ONE LEFT', final: 'YOU MADE IT OUT' };
+    const buttons = { win: 'DESCEND DEEPER ↓', wipe: 'GO BACK IN (new maze, same crew)', final: 'START OVER FROM LEVEL 0' };
     const el = document.createElement('div');
     el.className = 'screen overlay';
     el.innerHTML = `
-      <h2 class="${kind === 'win' ? 'big-win' : 'big-death'}">${kind === 'win' ? 'NOCLIPPED OUT' : 'NO ONE LEFT'}</h2>
+      <h2 class="${kind === 'wipe' ? 'big-death' : 'big-win'}">${titles[kind]}</h2>
       <p>${detail}</p>
       <div class="panel">
-        <button class="primary" id="e-again">GO BACK IN (new maze, same crew)</button>
+        <button class="primary" id="e-again">${buttons[kind]}</button>
         <button id="e-leave">LEAVE</button>
       </div>`;
     this.uiEl.appendChild(el);
