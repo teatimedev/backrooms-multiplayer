@@ -4,12 +4,15 @@
 code to friends. (Game server: `backrooms-mp.fly.dev`, sleeps when idle; the
 first connect of the day may take a few seconds to wake it.)
 
-A browser-based co-op horror game. You and up to 7 friends have noclipped into
-an infinite, procedurally generated labyrinth of mono-yellow office rooms.
-Find each other. Pull the **three breaker panels** to power the dead exit.
-Leave **together** — the doorway only counts if every living player stands in
-it. Something in the walls hunts whoever wanders off alone, it gets angry when
-the power comes on, and the only thing it hates is your flashlight.
+A browser-based co-op horror game in three descending acts. You and up to 7
+friends have noclipped into an infinite, procedurally generated labyrinth.
+Each level: find each other, pull the **three breaker panels** to power the
+dead exit, and step through **together** — but the door doesn't go out, it
+goes *down*. **LEVEL 0** (the mono-yellow lobby) → **LEVEL 1** (a concrete
+garage under sodium light) → **THE POOLROOMS** (glossy tile and cold water
+light). The thing in the walls gets faster and hungrier with every level —
+only escaping the poolrooms sets you free. It hunts whoever wanders off
+alone, and the only thing it hates is your flashlight.
 
 Everything — textures, audio, the maze itself — is generated procedurally at
 runtime. There are no asset downloads; the whole game is ~150 kB gzipped.
@@ -41,7 +44,7 @@ code and **JOIN**. You'll spawn scattered in the same maze — go find yourself.
 | **Glimpses** | Sometimes it's just… standing there, far down a hall. Sometimes it isn't there at all. Low sanity blurs the difference. |
 | **Chalk** (hold `C`, flick mouse, release) | Draw arrows/symbols on walls and floors. Synced to everyone, persistent for the session. Navigate — or gaslight. |
 | **Mental map** (hold `TAB`) | A chalk sketch of everywhere *you* have personally been — scroll to zoom. Shows the crew's chalk marks, landmarks you've found, breakers, the exit once seen, where people died, and edge arrows toward everything off-screen. |
-| **Almond water** | Restores sanity and gives you an 8-second sense of the exit's direction (check your map). |
+| **Almond water** | Carry up to two bottles; `Q` to drink. Restores sanity and gives an 8-second pulse toward the nearest objective. Drinking while bleeding out stabilises you — once. |
 | **Sanity** | Drains alone, in the dark, near the entity. Low sanity means whispers, visual decay, and things that aren't there. Company heals it. |
 | **Echoes** | The dead become spectators. They can't speak — but every 25s they can press `F` to stutter the lights near them. Near the entity, that flicker *stuns it*. Guide the living. Or troll them. |
 | **Audio mimicry** | Late in a round, the entity borrows footsteps and voices and plays them from the wrong direction. Trust nothing you can't see. |
