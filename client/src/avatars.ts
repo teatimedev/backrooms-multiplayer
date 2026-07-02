@@ -111,13 +111,15 @@ export class Avatar {
     const pitch = lerpA(a.s[4], b.s[4]);
     const anim = b.s[5];
 
-    this.group.position.set(x, anim === 3 ? y - 1.3 : 0, z);
+    this.group.position.set(x, anim === 3 ? y - 1.3 : anim === 4 ? 0.12 : 0, z);
     this.group.rotation.y = yaw;
+    // downed: pitch the whole body onto the carpet
+    this.group.rotation.x += ((anim === 4 ? -1.25 : 0) - this.group.rotation.x) * Math.min(1, dt * 5);
     this.head.rotation.x = -pitch * 0.8;
 
-    // limb swing scaled to gait
-    const rate = anim === 2 ? 11 : anim === 1 ? 6.5 : 0;
-    const amp = anim === 2 ? 0.85 : anim === 1 ? 0.5 : 0;
+    // limb swing scaled to gait (downed: weak drag)
+    const rate = anim === 4 ? 2.5 : anim === 2 ? 11 : anim === 1 ? 6.5 : 0;
+    const amp = anim === 4 ? 0.3 : anim === 2 ? 0.85 : anim === 1 ? 0.5 : 0;
     this.swingT += dt * rate;
     const s = Math.sin(this.swingT) * amp;
     this.legL.rotation.x = s; this.legR.rotation.x = -s;
@@ -139,7 +141,9 @@ export class Avatar {
     }
     const mat = this.tag.material as THREE.SpriteMaterial;
     mat.opacity += (this.tagOpacity - mat.opacity) * Math.min(1, dt * 6);
-    this.headlamp.visible = this.alive;
+    this.headlamp.visible = this.alive && anim !== 4;
+    // sprites ignore group rotation, so keep the tag above a downed body
+    this.tag.position.y = anim === 4 ? 0.9 : 2.05;
   }
 
   dispose(scene: THREE.Scene): void {

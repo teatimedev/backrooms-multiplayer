@@ -7,6 +7,7 @@ import { chalkTex, CHALK_SYMBOLS } from './textures';
 export { CHALK_SYMBOLS };
 
 export class ChalkSystem {
+  marks: Mark[] = []; // authoritative list, also drawn on the mental map
   private textures: THREE.CanvasTexture[] = [];
   private meshes: THREE.Mesh[] = [];
   private ray = new THREE.Raycaster();
@@ -34,6 +35,7 @@ export class ChalkSystem {
   }
 
   add(m: Mark): void {
+    this.marks.push(m);
     const mat = new THREE.MeshBasicMaterial({
       map: this.textures[m.sym % this.textures.length],
       transparent: true,
@@ -58,6 +60,7 @@ export class ChalkSystem {
   setAll(marks: Mark[]): void {
     for (const mesh of this.meshes) this.scene.remove(mesh);
     this.meshes = [];
+    this.marks = [];
     for (const m of marks) this.add(m);
   }
 }

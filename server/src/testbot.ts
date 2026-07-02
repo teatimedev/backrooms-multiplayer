@@ -73,7 +73,11 @@ ws.on('message', (raw: Buffer) => {
   if (m.t === 'win') console.log(`[bot] WIN after ${m.time}s`);
   if (m.t === 'wipe') console.log(`[bot] WIPE after ${m.time}s`);
   if (m.t === 'flicker') console.log(`[bot] flicker event at (${m.x.toFixed(1)},${m.z.toFixed(1)}) r=${m.r}`);
-  if (m.t === 'kill') console.log(`[bot] KILL: ${m.id}${m.id === me ? ' (me!)' : ''}`);
+  if (m.t === 'down') console.log(`[bot] DOWN: ${m.id}${m.id === me ? ' (me!)' : ''}`);
+  if (m.t === 'dead') console.log(`[bot] DEAD: ${m.id}${m.id === me ? ' (me!)' : ''}`);
+  if (m.t === 'revived') console.log(`[bot] REVIVED: ${m.id} by ${m.by}`);
+  if (m.t === 'rp') { /* revive progress, noisy */ }
+  if (m.t === 'blackout') console.log(`[bot] BLACKOUT ${m.ms}ms`);
   if (m.t === 'mimic') console.log(`[bot] mimic event`);
 });
 setTimeout(() => {

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "GAME_PORT=8471 tsx watch src/index.ts",
+    "dev": "GAME_PORT=8471 BR_DEBUG=1 tsx watch src/index.ts",
     "start": "tsx src/index.ts"
   },
   "dependencies": {

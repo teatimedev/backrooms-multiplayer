@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import { fnv } from '../../shared/src/rng.js';
 import { exitPos, spawnPoint, almondAt, breakerSpots, BREAKERS_NEEDED } from '../../shared/src/worldgen.js';
+import { REVIVE_TIME, REVIVE_RANGE, BLEED_OUT_HELPED, BLEED_OUT_SOLO } from '../../shared/src/protocol.js';
 import type { Mark, PlayerInfo, S2C, StateTuple } from '../../shared/src/protocol.js';
 import { Entity } from './entity.js';
 
@@ -21,6 +22,10 @@ export interface Player {
   hasState: boolean;
   lastFlick: number;
   shining: boolean;
+  downed: boolean;
+  downedAt: number;
+  reviveProgress: number;
+  revivers: Set<string>;
 }
 
 export class Room {
@@ -54,6 +59,7 @@ export class Room {
       id, ws, name: name.slice(0, 16) || 'anon', color: color & 7,
       alive: this.status === 'playing', spawnIndex,
       state: [sp.x, 1.6, sp.z, 0, 0, 0], hasState: false, lastFlick: 0, shining: false,
+      downed: false, downedAt: 0, reviveProgress: 0, revivers: new Set(),
     };
     this.players.set(id, p);
     this.emptySince = null;
@@ -71,7 +77,7 @@ export class Room {
     const p = this.players.get(id);
     if (!p) return;
     this.players.delete(id);
-    if (this.entity.targetId === id) this.entity.despawn(5);
+    for (const q of this.players.values()) q.revivers.delete(id);
     this.broadcast({ t: 'pl', id, name: p.name });
     if (this.players.size === 0) this.emptySince = Date.now();
     else this.checkEndConditions();
@@ -150,9 +156,22 @@ export class Room {
         }
         break;
       }
+      case 'revive': {
+        const target = this.players.get(String(msg.id));
+        if (!target || !target.downed) return;
+        if (msg.on === true && p.alive && !p.downed) target.revivers.add(p.id);
+        else target.revivers.delete(p.id);
+        break;
+      }
       case 'restart': {
         if (this.status === 'playing' && this.ageSec() < 15) return;
         this.newRound();
+        break;
+      }
+      case 'dbg': {
+        if (!process.env.BR_DEBUG) return;
+        if (msg.cmd === 'spawn') this.entity.forceSpawn();
+        if (msg.cmd === 'down') this.downPlayer(String(msg.id ?? p.id));
         break;
       }
       case 'ping':
@@ -161,12 +180,61 @@ export class Room {
     }
   }
 
-  killPlayer(id: string): void {
+  /** The entity caught someone: downed, not dead. Teammates can revive. */
+  downPlayer(id: string): void {
+    const p = this.players.get(id);
+    if (!p || !p.alive || p.downed) return;
+    p.downed = true;
+    p.downedAt = Date.now();
+    p.reviveProgress = 0;
+    p.revivers.clear();
+    this.broadcast({ t: 'down', id });
+  }
+
+  private diePlayer(id: string): void {
     const p = this.players.get(id);
     if (!p || !p.alive) return;
     p.alive = false;
-    this.broadcast({ t: 'kill', id });
+    p.downed = false;
+    this.broadcast({ t: 'dead', id });
     this.checkEndConditions();
+  }
+
+  blackout(ms: number): void {
+    this.broadcast({ t: 'blackout', ms: Math.round(ms) });
+  }
+
+  /** Bleed-outs and revives, run every tick. */
+  private updateDowned(): void {
+    for (const p of this.players.values()) {
+      if (!p.alive || !p.downed) continue;
+      const helpers = [...this.players.values()].some((q) => q !== p && q.alive && !q.downed && q.hasState);
+      const limit = helpers ? BLEED_OUT_HELPED : BLEED_OUT_SOLO;
+      // validate revivers by distance every tick
+      let reviving = false;
+      let by = '';
+      for (const rid of p.revivers) {
+        const q = this.players.get(rid);
+        if (!q || !q.alive || q.downed) { p.revivers.delete(rid); continue; }
+        if (Math.hypot(q.state[0] - p.state[0], q.state[2] - p.state[2]) > REVIVE_RANGE) continue;
+        reviving = true; by = rid;
+      }
+      if (reviving) {
+        p.reviveProgress += TICK_MS / 1000;
+        if (p.reviveProgress >= REVIVE_TIME) {
+          p.downed = false;
+          p.reviveProgress = 0;
+          p.revivers.clear();
+          this.broadcast({ t: 'revived', id: p.id, by });
+          this.entity.avoidFor(p.id, 25);
+          continue;
+        }
+        this.broadcast({ t: 'rp', id: p.id, p: p.reviveProgress / REVIVE_TIME });
+      } else if (p.reviveProgress > 0) {
+        p.reviveProgress = Math.max(0, p.reviveProgress - (TICK_MS / 1000) * 0.7);
+      }
+      if ((Date.now() - p.downedAt) / 1000 > limit) this.diePlayer(p.id);
+    }
   }
 
   private checkEndConditions(): void {
@@ -182,6 +250,7 @@ export class Room {
   private tick(): void {
     if (this.status === 'playing') {
       this.entity.update(this, TICK_MS / 1000);
+      this.updateDowned();
       this.checkWin();
     }
     // state broadcast
@@ -219,6 +288,9 @@ export class Room {
     let i = 0;
     for (const p of this.players.values()) {
       p.alive = true;
+      p.downed = false;
+      p.reviveProgress = 0;
+      p.revivers.clear();
       p.hasState = false;
       p.spawnIndex = i++;
       const sp = spawnPoint(this.seed, p.spawnIndex);

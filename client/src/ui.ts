@@ -115,7 +115,14 @@ export class UI {
     hud.innerHTML = `
       <div id="crosshair"></div>
       <div id="objective"></div>
+      <div id="pips"></div>
+      <div id="rtimer"></div>
+      <div id="team"></div>
       <div id="hint"></div>
+      <div id="bleed"></div>
+      <div id="revivebar"><div class="label"></div><div class="track"><div class="fill"></div></div></div>
+      <div id="downarrow"><div class="tri"></div><div class="dlabel"></div></div>
+      <div id="sanitybar"><div class="fill"></div></div>
       <div id="stamina"><div class="fill"></div></div>
       <div id="ptt">V — talk</div>
       <div id="toast"></div>
@@ -171,6 +178,64 @@ export class UI {
   setHint(text: string): void {
     const el = this.hud?.querySelector('#hint');
     if (el && el.textContent !== text) el.textContent = text;
+  }
+
+  setPips(collected: number, total: number): void {
+    const el = this.hud?.querySelector('#pips');
+    if (!el) return;
+    const html = Array.from({ length: total }, (_, i) =>
+      `<span class="pip${i < collected ? ' on' : ''}"></span>`).join('');
+    if (el.innerHTML !== html) el.innerHTML = html;
+  }
+
+  setTimer(secs: number): void {
+    const el = this.hud?.querySelector('#rtimer');
+    if (!el) return;
+    const t = `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`;
+    if (el.textContent !== t) el.textContent = t;
+  }
+
+  setTeam(list: { name: string; color: string; state: 'alive' | 'down' | 'echo' }[]): void {
+    const el = this.hud?.querySelector('#team');
+    if (!el) return;
+    const html = list.map((p) =>
+      `<div class="tm ${p.state}"><span class="dot" style="background:${p.color}"></span>${p.name}${p.state === 'down' ? ' — DOWN' : p.state === 'echo' ? ' — echo' : ''}</div>`).join('');
+    if (el.innerHTML !== html) el.innerHTML = html;
+  }
+
+  setSanity(v: number): void {
+    const bar = this.hud?.querySelector('#sanitybar') as HTMLElement | null;
+    if (!bar) return;
+    bar.style.opacity = v < 70 ? '1' : '0';
+    (bar.querySelector('.fill') as HTMLElement).style.width = `${v}%`;
+  }
+
+  setBleed(secsLeft: number | null): void {
+    const el = this.hud?.querySelector('#bleed') as HTMLElement | null;
+    if (!el) return;
+    el.style.display = secsLeft === null ? 'none' : 'block';
+    if (secsLeft !== null) el.textContent = `BLEEDING OUT — ${Math.max(0, Math.ceil(secsLeft))}s — a friend can still bring you back`;
+  }
+
+  setReviveBar(label: string | null, p: number): void {
+    const el = this.hud?.querySelector('#revivebar') as HTMLElement | null;
+    if (!el) return;
+    el.style.display = label === null ? 'none' : 'block';
+    if (label !== null) {
+      (el.querySelector('.label') as HTMLElement).textContent = label;
+      (el.querySelector('.fill') as HTMLElement).style.width = `${Math.round(p * 100)}%`;
+    }
+  }
+
+  /** Screen-edge arrow toward a downed teammate. angleRad is screen-space. */
+  setDownArrow(show: boolean, angleRad = 0, label = ''): void {
+    const el = this.hud?.querySelector('#downarrow') as HTMLElement | null;
+    if (!el) return;
+    el.style.display = show ? 'flex' : 'none';
+    if (show) {
+      (el.querySelector('.tri') as HTMLElement).style.transform = `rotate(${angleRad}rad)`;
+      (el.querySelector('.dlabel') as HTMLElement).textContent = label;
+    }
   }
 
   toast(text: string, ms = 3200): void {

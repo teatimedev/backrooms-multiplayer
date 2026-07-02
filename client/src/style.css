@@ -113,6 +113,48 @@ label.chk { display: flex; gap: 8px; align-items: center; color: var(--dim); fon
   color: rgba(255, 179, 71, 0.9); font-size: 14px; letter-spacing: 0.2em;
   text-shadow: 0 0 10px rgba(0, 0, 0, 0.9);
 }
+#pips { position: absolute; top: 62px; left: 50%; transform: translateX(-50%); display: flex; gap: 7px; }
+#pips .pip {
+  width: 11px; height: 11px; border: 1px solid rgba(255, 179, 71, 0.6);
+  transform: rotate(45deg); background: transparent; transition: background 0.4s, border-color 0.4s;
+}
+#pips .pip.on { background: #4dff88; border-color: #4dff88; box-shadow: 0 0 8px rgba(77, 255, 136, 0.6); }
+#rtimer {
+  position: absolute; top: 24px; right: 36px;
+  color: rgba(214, 202, 160, 0.4); font-size: 13px; letter-spacing: 0.2em;
+}
+#team { position: absolute; top: 24px; left: 36px; display: flex; flex-direction: column; gap: 5px; }
+#team .tm {
+  color: rgba(232, 224, 196, 0.75); font-size: 12px; letter-spacing: 0.1em;
+  display: flex; align-items: center; gap: 7px; text-shadow: 0 1px 3px #000;
+}
+#team .tm .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+#team .tm.down { color: #ff6b5a; animation: flick 1.2s infinite; }
+#team .tm.echo { color: rgba(150, 145, 130, 0.5); }
+#sanitybar {
+  position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+  width: 120px; height: 3px; background: rgba(0, 0, 0, 0.5);
+  opacity: 0; transition: opacity 0.6s;
+}
+#sanitybar .fill { height: 100%; background: rgba(154, 143, 106, 0.9); }
+#bleed {
+  display: none; position: absolute; bottom: 18%; left: 50%; transform: translateX(-50%);
+  color: #ff6b5a; font-size: 15px; letter-spacing: 0.25em; text-align: center;
+  text-shadow: 0 0 14px rgba(0, 0, 0, 1); animation: flick 1.6s infinite;
+}
+#revivebar { display: none; position: absolute; bottom: 24%; left: 50%; transform: translateX(-50%); text-align: center; }
+#revivebar .label { color: var(--paper); font-size: 13px; letter-spacing: 0.2em; margin-bottom: 7px; text-shadow: 0 0 10px #000; }
+#revivebar .track { width: 220px; height: 6px; background: rgba(0, 0, 0, 0.6); border: 1px solid #4a4022; }
+#revivebar .fill { height: 100%; background: #b6e0a8; width: 0; }
+#downarrow {
+  display: none; position: absolute; top: 30%; left: 50%; transform: translateX(-50%);
+  flex-direction: column; align-items: center; gap: 5px;
+}
+#downarrow .tri {
+  width: 0; height: 0; border-left: 9px solid transparent; border-right: 9px solid transparent;
+  border-bottom: 15px solid #ff6b5a; filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.9));
+}
+#downarrow .dlabel { color: #ff6b5a; font-size: 12px; letter-spacing: 0.2em; text-shadow: 0 0 10px #000; }
 #chatlog {
   position: absolute; bottom: 90px; left: 36px; width: 340px;
   display: flex; flex-direction: column; gap: 3px; font-size: 13px;

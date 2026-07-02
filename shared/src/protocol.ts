@@ -1,8 +1,13 @@
 // Wire protocol. JSON messages over a single WebSocket.
 // Player state tuples are [x, y, z, yaw, pitch, anim] to keep packets small.
-// anim: 0 idle, 1 walk, 2 run, 3 echo(dead, flying).
+// anim: 0 idle, 1 walk, 2 run, 3 echo(dead, flying), 4 downed(crawl).
 
-export type Anim = 0 | 1 | 2 | 3;
+export type Anim = 0 | 1 | 2 | 3 | 4;
+
+export const REVIVE_TIME = 4;        // seconds holding E to pick someone up
+export const REVIVE_RANGE = 3.5;     // metres
+export const BLEED_OUT_HELPED = 60;  // downed with living teammates
+export const BLEED_OUT_SOLO = 12;    // downed with nobody left to help
 export type StateTuple = [number, number, number, number, number, Anim];
 
 export interface PlayerInfo {
@@ -35,7 +40,9 @@ export type C2S =
   | { t: 'chat'; text: string }
   | { t: 'rtc'; to: string; data: unknown }
   | { t: 'flick' }
+  | { t: 'revive'; id: string; on: boolean }
   | { t: 'restart' }
+  | { t: 'dbg'; cmd: string; id?: string }
   | { t: 'ping'; n: number };
 
 export type S2C =
@@ -49,7 +56,11 @@ export type S2C =
   | { t: 'breaker'; id: string; by: string; left: number }
   | { t: 'powered' }
   | { t: 'retreat'; x: number; z: number }
-  | { t: 'kill'; id: string }
+  | { t: 'down'; id: string }
+  | { t: 'dead'; id: string }
+  | { t: 'revived'; id: string; by: string }
+  | { t: 'rp'; id: string; p: number }
+  | { t: 'blackout'; ms: number }
   | { t: 'chat'; from: string; name: string; text: string }
   | { t: 'flicker'; x: number; z: number; r: number }
   | { t: 'mimic'; x: number; z: number; kind: 'steps' | 'voice' }

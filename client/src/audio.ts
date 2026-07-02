@@ -274,6 +274,38 @@ export class GameAudio {
     setTimeout(() => this.burst(this.master, 0.6, 'lowpass', 300, 1, 0.6, 0.4), 130);
   }
 
+  /** Someone got taken down: a human cry, positioned, cut short. */
+  downScream(x: number, z: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const p = this.panner(x, 1.4, z); p.connect(this.master);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    const t = ctx.currentTime;
+    o.frequency.setValueAtTime(600, t);
+    o.frequency.linearRampToValueAtTime(820, t + 0.15);
+    o.frequency.exponentialRampToValueAtTime(160, t + 0.55);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 1.2;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.32, t);
+    g.gain.setValueAtTime(0.3, t + 0.45);
+    g.gain.linearRampToValueAtTime(0, t + 0.6); // cut, not faded
+    o.connect(f).connect(g).connect(this.master);
+    o.start(); o.stop(t + 0.7);
+    this.burst(p, 0.5, 'lowpass', 200, 1, 1.2, 0.3);
+  }
+
+  /** Ragged breathing when stamina is gone. Call with level 0..1. */
+  private breathT = 0;
+  breathe(dt: number, level: number): void {
+    if (!this.ctx || level <= 0) return;
+    this.breathT -= dt;
+    if (this.breathT <= 0) {
+      this.breathT = 0.9 - level * 0.25;
+      this.burst(this.master, 0.4, 'bandpass', 500 + Math.random() * 200, 1.5, 0.05 * level, 0.3);
+    }
+  }
+
   /** The entity driven off by light: a shriek falling away into the maze. */
   retreatShriek(x: number, z: number): void {
     if (!this.ctx) return;

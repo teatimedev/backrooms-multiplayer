@@ -14,6 +14,7 @@ const GradeShader = {
     time: { value: 0 },
     danger: { value: 0 },
     sanity: { value: 1 },   // 0..1
+    wound: { value: 0 },    // 0..1 downed / bleeding out
     flash: { value: 0 },    // death/win white-out
     fade: { value: 1 },     // scene fade-in
   },
@@ -23,7 +24,7 @@ const GradeShader = {
   `,
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse;
-    uniform float time, danger, sanity, flash, fade;
+    uniform float time, danger, sanity, wound, flash, fade;
     varying vec2 vUv;
 
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -62,6 +63,12 @@ const GradeShader = {
       // danger pulse at the edges
       col.r += (1.0 - vig) * danger * 0.12 * (0.6 + 0.4 * sin(time * 9.0));
 
+      // downed: the world drains and bleeds at the rim, pulsing with a slow heart
+      float wpulse = 0.7 + 0.3 * sin(time * 3.2);
+      col = mix(col, vec3(dot(col, vec3(0.35, 0.5, 0.15))), wound * 0.55);
+      col.r += (1.0 - vig) * wound * 0.35 * wpulse;
+      col *= 1.0 - wound * 0.25;
+
       col = mix(col, vec3(1.0), clamp(flash, 0.0, 1.0));
       col *= fade;
       gl_FragColor = vec4(col, 1.0);
@@ -74,6 +81,7 @@ export class FX {
   private grade: ShaderPass;
   danger = 0;
   sanity = 100;
+  wound = 0;
   flash = 0;
   fade = 0;
 
@@ -94,6 +102,7 @@ export class FX {
     u.time.value = time;
     u.danger.value += (this.danger - u.danger.value) * Math.min(1, dt * 3);
     u.sanity.value = this.sanity / 100;
+    u.wound.value += (this.wound - u.wound.value) * Math.min(1, dt * 2.5);
     this.flash = Math.max(0, this.flash - dt * 1.2);
     u.flash.value = this.flash;
     this.fade = Math.min(1, this.fade + dt * 0.4);

@@ -45,6 +45,7 @@ export class World {
   exitVoid: THREE.Mesh | null = null;
   breakers = new Map<string, Breaker>();
   powered = false;
+  blackoutUntil = 0;
 
   private mats: Record<string, THREE.Material>;
   private wallGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -150,6 +151,10 @@ export class World {
 
   /** 0..1 brightness of a fixture right now — buzzy, occasionally dropping out. */
   lightLevel(f: Fixture, time: number): number {
+    if (time < this.blackoutUntil) {
+      // total blackout: a few fixtures gutter at a few percent
+      return f.phase > 0.85 ? 0.05 + 0.03 * Math.sin(time * 31 + f.phase * 40) : 0.005;
+    }
     let lvl = 0.92 + 0.08 * Math.sin(time * 47 + f.phase * 20);
     const drop = Math.sin(time * 1.9 + f.phase * 37) * Math.sin(time * 4.7 + f.phase * 91);
     if (drop > 0.985) lvl *= 0.15;

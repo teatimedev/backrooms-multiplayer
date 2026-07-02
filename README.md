@@ -33,12 +33,14 @@ code and **JOIN**. You'll spawn scattered in the same maze — go find yourself.
 | Thing | What it means |
 |---|---|
 | **The code** | Seeds the world. Everyone with the same code generates the *identical* infinite maze, deterministically. |
-| **The entity** | Server-controlled. It always targets the player who is **furthest from the group**. Stick together and it circles; split up and it commits. Lights die around it. |
+| **The entity** | Driven by an AI Director: calm → build → peak → guaranteed breathing room, with a hunger that shortens the quiet as the round goes on. It prefers the most isolated player, remembers its last victim and picks on someone else next, and its **first appearance each round is only a warning** — it closes in, stares, and leaves. Lights die around it; the hum goes silent near it. |
+| **Going down** | Getting caught doesn't kill you — you're **downed**: crawling, bleeding out (60s). A teammate holding `E` next to you for 4s brings you back. Downed alone with nobody left? You have 12 seconds to make peace. It always retreats after a takedown — the rescue window is real. |
+| **Blackouts** | Sometimes, when it commits, every light in the world dies with it. |
 | **Breakers** | Three panels, scattered in different directions (they spit audible sparks). `E` to pull. All three → the exit powers on → the entity stops being patient. Split up to cover ground, or stay safe and slow? |
 | **The light** | Hold your flashlight beam on the entity: it slows. Keep it lit up during a hunt for a few seconds: it flees shrieking. Your only weapon. |
 | **Glimpses** | Sometimes it's just… standing there, far down a hall. Sometimes it isn't there at all. Low sanity blurs the difference. |
 | **Chalk** (hold `C`, flick mouse, release) | Draw arrows/symbols on walls and floors. Synced to everyone, persistent for the session. Navigate — or gaslight. |
-| **Mental map** (hold `TAB`) | A chalk sketch of everywhere *you* have personally been. Teammates show as colored dots. |
+| **Mental map** (hold `TAB`) | A chalk sketch of everywhere *you* have personally been — scroll to zoom. Shows the crew's chalk marks, landmarks you've found, breakers, the exit once seen, where people died, and edge arrows toward everything off-screen. |
 | **Almond water** | Restores sanity and gives you an 8-second sense of the exit's direction (check your map). |
 | **Sanity** | Drains alone, in the dark, near the entity. Low sanity means whispers, visual decay, and things that aren't there. Company heals it. |
 | **Echoes** | The dead become spectators. They can't speak — but every 25s they can press `F` to stutter the lights near them. Near the entity, that flicker *stuns it*. Guide the living. Or troll them. |

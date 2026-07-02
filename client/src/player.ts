@@ -4,7 +4,8 @@ import { PLAYER_R, resolveCollision } from '@shared/worldgen';
 import type { Anim } from '@shared/protocol';
 
 const EYE = 1.62;
-const WALK = 3.7, RUN = 6.6, ECHO_FLY = 8.5;
+const DOWN_EYE = 0.75;
+const WALK = 3.7, RUN = 6.6, CRAWL = 1.15, ECHO_FLY = 8.5;
 const ACCEL = 24, FRICTION = 11;
 
 export class Player {
@@ -14,6 +15,8 @@ export class Player {
   stamina = 1;
   sanity = 100;
   alive = true;
+  downed = false;
+  private eyeH = EYE;
   frozen = true; // no movement until pointer locked & spawned
   anim: Anim = 0;
   flashlightOn = true;
@@ -44,6 +47,7 @@ export class Player {
     this.pos.set(x, EYE, z);
     this.vel.set(0, 0, 0);
     this.alive = true;
+    this.downed = false;
     this.sanity = 100;
     this.stamina = 1;
   }
@@ -64,10 +68,10 @@ export class Player {
     }
     const moving = fx !== 0 || fz !== 0;
     const wantRun = k.has('ShiftLeft') || k.has('ShiftRight');
-    this.sprinting = this.alive && moving && wantRun && this.stamina > 0.02;
+    this.sprinting = this.alive && !this.downed && moving && wantRun && this.stamina > 0.02;
     this.stamina = Math.max(0, Math.min(1, this.stamina + (this.sprinting ? -dt / 6.5 : dt / 5.5)));
 
-    const speed = !this.alive ? ECHO_FLY : this.sprinting ? RUN : WALK;
+    const speed = !this.alive ? ECHO_FLY : this.downed ? CRAWL : this.sprinting ? RUN : WALK;
     // world-space wish direction from yaw (forward is -Z rotated by yaw)
     const f = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const r = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
@@ -102,11 +106,12 @@ export class Player {
       this.onFootstep?.(this.sprinting ? 1 : 0.55);
     }
 
-    this.anim = !this.alive ? 3 : hSpeed > 4.2 ? 2 : hSpeed > 0.4 ? 1 : 0;
+    this.anim = !this.alive ? 3 : this.downed ? 4 : hSpeed > 4.2 ? 2 : hSpeed > 0.4 ? 1 : 0;
 
-    // camera
+    // camera (downed: sink to the carpet)
+    this.eyeH += ((this.downed ? DOWN_EYE : EYE) - this.eyeH) * Math.min(1, dt * 4);
     const cam = this.camera;
-    cam.position.set(this.pos.x, (this.alive ? EYE : this.pos.y) + bob + breathe, this.pos.z);
+    cam.position.set(this.pos.x, (this.alive ? this.eyeH : this.pos.y) + bob + breathe, this.pos.z);
     cam.rotation.set(0, 0, 0);
     cam.rotateY(this.yaw);
     cam.rotateX(this.pitch);

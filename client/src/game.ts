@@ -1,6 +1,7 @@
 // The conductor: rendering, input, network events, sanity, the loop.
 import * as THREE from 'three';
-import { BREAKERS_NEEDED, losBlocked, resolveCollision } from '@shared/worldgen';
+import { BREAKERS_NEEDED, landmarkKind, blockArchetype, BLOCK, CELL, losBlocked, resolveCollision } from '@shared/worldgen';
+import { AVATAR_COLORS, BLEED_OUT_HELPED, BLEED_OUT_SOLO, REVIVE_RANGE } from '@shared/protocol';
 import type { PlayerInfo, S2C, StateTuple } from '@shared/protocol';
 import { World, LightPool } from './world';
 import { Player } from './player';
@@ -42,10 +43,19 @@ export class Game {
   private exitSense = 0;
   private shining = false;
   private shineToastShown = false;
+  private reviveToastShown = false;
   private glimpse: EntityView;
   private glimpseTimer = 30;
   private glimpseUntil = 0;
   private sparkTimer = 4;
+  private poiTimer = 0;
+  private hudTimer = 0;
+  private roundStartMs = Date.now();
+  private downedIds = new Set<string>();
+  private myDownedAt = 0;
+  private reviveTargetId: string | null = null;
+  private lastRpAt = 0;
+  private hemi: THREE.HemisphereLight;
   private radialHeld = false;
   private radialVec = { x: 0, y: 0 };
   private radialSel = 0;
@@ -72,7 +82,8 @@ export class Game {
     this.camera = new THREE.PerspectiveCamera(74, innerWidth / innerHeight, 0.05, 90);
     this.scene.fog = new THREE.FogExp2(0x241d0e, 0.05);
     this.scene.background = new THREE.Color(0x0d0a05);
-    this.scene.add(new THREE.HemisphereLight(0x8a7c4d, 0x2e2410, 0.85));
+    this.hemi = new THREE.HemisphereLight(0x8a7c4d, 0x2e2410, 0.85);
+    this.scene.add(this.hemi);
 
     this.world = new World(this.scene, this.seed, joined.taken, joined.breakers);
     this.lights = new LightPool(this.scene);
@@ -200,15 +211,59 @@ export class Game {
       this.audio.retreatShriek(m.x, m.z);
       this.ui.toast('it recoils from the light', 3500);
     });
-    net.on('kill', (m) => {
+    net.on('down', (m) => {
+      this.downedIds.add(m.id);
+      if (m.id === this.myId) {
+        this.player.downed = true;
+        this.myDownedAt = Date.now();
+        this.fx.flash = 0.7;
+        this.player.shake = Math.max(this.player.shake, 0.05);
+        this.audio.downScream(this.player.pos.x, this.player.pos.z);
+        this.ui.toast('IT HAS YOU — crawl. call out. hold on.', 5000);
+      } else {
+        const av = this.avatars.get(m.id);
+        const x = av?.lastState[0] ?? this.player.pos.x, z = av?.lastState[2] ?? this.player.pos.z;
+        this.audio.downScream(x, z);
+        this.ui.toast(`${(this.names.get(m.id) ?? 'someone').toUpperCase()} IS DOWN — get to them`, 5000);
+        if (!this.reviveToastShown) {
+          this.reviveToastShown = true;
+          setTimeout(() => this.ui.toast('hold E next to them to bring them back', 4500), 5200);
+        }
+      }
+    });
+    net.on('dead', (m) => {
+      this.downedIds.delete(m.id);
       if (m.id === this.myId) this.die();
       else {
         const av = this.avatars.get(m.id);
-        if (av) av.alive = false;
-        this.audio.distantThud(this.avatars.get(m.id)?.lastState[0] ?? this.player.pos.x,
-          this.avatars.get(m.id)?.lastState[2] ?? this.player.pos.z);
-        this.ui.toast(`${this.names.get(m.id) ?? 'someone'} WAS TAKEN`, 4500);
+        if (av) {
+          av.alive = false;
+          this.map.addDeath(av.lastState[0], av.lastState[2]);
+          this.audio.distantThud(av.lastState[0], av.lastState[2]);
+        }
+        this.ui.toast(`${this.names.get(m.id) ?? 'someone'} is gone`, 4500);
       }
+    });
+    net.on('revived', (m) => {
+      this.downedIds.delete(m.id);
+      this.ui.setReviveBar(null, 0);
+      if (m.id === this.myId) {
+        this.player.downed = false;
+        this.player.sanity = Math.max(this.player.sanity, 55);
+        this.ui.toast(`${this.names.get(m.by) ?? 'someone'} brought you back. stay close.`, 4500);
+      } else {
+        this.ui.toast(`${this.names.get(m.id) ?? 'someone'} is back on their feet`, 3500);
+        if (this.reviveTargetId === m.id) this.reviveTargetId = null;
+      }
+    });
+    net.on('rp', (m) => {
+      this.lastRpAt = performance.now();
+      if (m.id === this.myId) this.ui.setReviveBar('someone is pulling you back', m.p);
+      else if (m.id === this.reviveTargetId) this.ui.setReviveBar(`reviving ${this.names.get(m.id) ?? ''}…`, m.p);
+    });
+    net.on('blackout', (m) => {
+      this.world.blackoutUntil = this.clock.elapsedTime + m.ms / 1000;
+      this.audio.distantThud(this.player.pos.x, this.player.pos.z);
     });
     net.on('chat', (m) => this.ui.chatLine(m.name, m.text));
     net.on('flicker', (m) => {
@@ -263,6 +318,11 @@ export class Game {
     this.shineToastShown = false;
     this.exitSense = 0;
     this.stepTimers.clear();
+    this.downedIds.clear();
+    this.reviveTargetId = null;
+    this.roundStartMs = Date.now();
+    this.ui.setReviveBar(null, 0);
+    this.ui.setBleed(null);
     for (const av of this.avatars.values()) av.alive = true;
     this.fx.fade = 0;
     this.refreshObjective();
@@ -351,7 +411,14 @@ export class Game {
           }
           break;
         case 'KeyE': {
-          if (!this.player.alive) break;
+          if (!this.player.alive || this.player.downed || e.repeat) break;
+          // reviving a downed teammate takes priority over anything else
+          const downed = this.nearestDowned(REVIVE_RANGE - 0.4);
+          if (downed) {
+            this.reviveTargetId = downed;
+            this.net.send({ t: 'revive', id: downed, on: true });
+            break;
+          }
           for (const b of this.world.breakers.values()) {
             if (!b.collected && Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z) < 2.6) {
               this.net.send({ t: 'breaker', id: b.id });
@@ -380,6 +447,9 @@ export class Game {
         case 'Tab':
           this.map.visible = false;
           break;
+        case 'KeyE':
+          this.stopReviving();
+          break;
         case 'KeyC':
           if (this.radialHeld) {
             this.radialHeld = false;
@@ -405,6 +475,24 @@ export class Game {
     this.ui.onChat = (text) => this.net.send({ t: 'chat', text });
   }
 
+  private nearestDowned(range: number): string | null {
+    let best: string | null = null, bd = range;
+    for (const [id, av] of this.avatars) {
+      if (!av.alive || !this.downedIds.has(id)) continue;
+      const d = Math.hypot(av.lastState[0] - this.player.pos.x, av.lastState[2] - this.player.pos.z);
+      if (d < bd) { bd = d; best = id; }
+    }
+    return best;
+  }
+
+  private stopReviving(): void {
+    if (this.reviveTargetId) {
+      this.net.send({ t: 'revive', id: this.reviveTargetId, on: false });
+      this.reviveTargetId = null;
+      this.ui.setReviveBar(null, 0);
+    }
+  }
+
   private placeChalk(): void {
     const m = this.chalk.tryPlace(this.camera, this.world.raycastTargets(), this.radialSel, this.player.yaw + Math.PI / 2);
     if (m) {
@@ -420,6 +508,8 @@ export class Game {
   private die(): void {
     if (!this.player.alive) return;
     this.player.alive = false;
+    this.player.downed = false;
+    this.ui.setBleed(null);
     this.audio.deathSting();
     this.fx.flash = 1.6;
     // face it
@@ -447,8 +537,12 @@ export class Game {
 
     p.update(dt, time);
     this.world.update(p.pos.x, p.pos.z, time);
-    const hum = this.lights.update(this.world, p.pos.x, p.pos.z, time);
-    this.map.visit(p.pos.x, p.pos.z);
+    let hum = this.lights.update(this.world, p.pos.x, p.pos.z, time);
+    this.map.visit(this.seed, p.pos.x, p.pos.z);
+
+    // blackout: even the ambient glow abandons you
+    const blackout = time < this.world.blackoutUntil;
+    this.hemi.intensity += ((blackout ? 0.1 : 0.85) - this.hemi.intensity) * Math.min(1, dt * 3);
 
     // remote avatars + their footsteps
     for (const [id, av] of this.avatars) {
@@ -471,7 +565,12 @@ export class Game {
     let danger = this.entity.update(dt, time, p.pos);
     const glimpseDanger = this.glimpse.update(dt, time, p.pos) * 0.45;
     danger = Math.max(danger, glimpseDanger);
-    this.audio.danger = p.alive ? danger : 0;
+    // the hum dies around it — silence is the warning
+    if (this.entity.active) {
+      const ed = Math.hypot(this.entity.pos.x - p.pos.x, this.entity.pos.y - p.pos.z);
+      hum *= 0.2 + 0.8 * Math.min(1, ed / 22);
+    }
+    this.audio.danger = p.alive ? Math.max(danger, p.downed ? 0.45 : 0) : 0;
     this.fx.danger = p.alive ? danger : 0;
     if (p.alive && danger > 0.55) p.shake = Math.max(p.shake, (danger - 0.55) * 0.05);
     if (this.entity.active && this.entity.mode === 2) {
@@ -509,7 +608,7 @@ export class Game {
     }
 
     // glimpses: between real hunts, something watches from down the hall
-    if (p.alive && !this.entity.active && p.sanity < 78) {
+    if (p.alive && !p.downed && !this.entity.active && p.sanity < 78) {
       if (this.glimpse.active) {
         const gd = Math.hypot(this.glimpse.pos.x - p.pos.x, this.glimpse.pos.y - p.pos.z);
         if (now > this.glimpseUntil || gd < 7.5) {
@@ -549,14 +648,101 @@ export class Game {
       if (nb) this.audio.spark(nb.x, nb.z);
     }
 
-    // "E — pull the breaker" hint
-    if (p.alive) {
-      let nearBreaker = false;
-      for (const b of this.world.breakers.values()) {
-        if (!b.collected && Math.hypot(b.x - p.pos.x, b.z - p.pos.z) < 2.6) { nearBreaker = true; break; }
+    // interaction hint: revive beats breaker
+    if (p.alive && !p.downed) {
+      const downedNear = this.nearestDowned(REVIVE_RANGE - 0.4);
+      if (downedNear) {
+        this.ui.setHint(`hold E — bring ${this.names.get(downedNear) ?? 'them'} back`);
+      } else {
+        let nearBreaker = false;
+        for (const b of this.world.breakers.values()) {
+          if (!b.collected && Math.hypot(b.x - p.pos.x, b.z - p.pos.z) < 2.6) { nearBreaker = true; break; }
+        }
+        this.ui.setHint(nearBreaker ? 'E — pull the breaker' : '');
       }
-      this.ui.setHint(nearBreaker ? 'E — pull the breaker' : '');
+    } else {
+      this.ui.setHint('');
     }
+
+    // reviving: cancel if either of us drifted apart
+    if (this.reviveTargetId) {
+      const av = this.avatars.get(this.reviveTargetId);
+      if (!av || !this.downedIds.has(this.reviveTargetId) ||
+        Math.hypot(av.lastState[0] - p.pos.x, av.lastState[2] - p.pos.z) > REVIVE_RANGE) {
+        this.stopReviving();
+      }
+    }
+    if (!this.reviveTargetId && !(p.downed) && performance.now() - this.lastRpAt > 600) {
+      this.ui.setReviveBar(null, 0);
+    }
+
+    // downed self: bleed HUD + wound grade
+    if (p.alive && p.downed) {
+      const helpers = [...this.avatars.values()].some((a) => a.alive && !this.downedIds.has(a.info.id));
+      const limit = helpers ? BLEED_OUT_HELPED : BLEED_OUT_SOLO;
+      const left = limit - (Date.now() - this.myDownedAt) / 1000;
+      this.ui.setBleed(left);
+      this.fx.wound = 0.55 + 0.45 * Math.max(0, 1 - left / limit);
+    } else {
+      this.ui.setBleed(null);
+      this.fx.wound = 0;
+    }
+
+    // screen-edge arrow toward the nearest downed teammate
+    let arrow = false;
+    if (p.alive && !p.downed) {
+      const id = this.nearestDowned(60);
+      if (id) {
+        const av = this.avatars.get(id)!;
+        const dx = av.lastState[0] - p.pos.x, dz = av.lastState[2] - p.pos.z;
+        const targetYaw = Math.atan2(-dx, -dz);
+        let rel = targetYaw - p.yaw;
+        while (rel > Math.PI) rel -= Math.PI * 2;
+        while (rel < -Math.PI) rel += Math.PI * 2;
+        this.ui.setDownArrow(true, -rel, `${this.names.get(id) ?? ''} · ${Math.round(Math.hypot(dx, dz))}m`);
+        arrow = true;
+      }
+    }
+    if (!arrow) this.ui.setDownArrow(false);
+
+    // discover landmarks for the map
+    this.poiTimer -= dt;
+    if (this.poiTimer <= 0) {
+      this.poiTimer = 0.5;
+      const bx = Math.floor(p.pos.x / (BLOCK * CELL)), bz = Math.floor(p.pos.z / (BLOCK * CELL));
+      if (blockArchetype(this.seed, bx, bz) === 'landmark') {
+        const kind = landmarkKind(this.seed, bx, bz);
+        if (kind !== 'exit' && kind !== 'breaker') {
+          const cx = (bx * BLOCK + 4) * CELL + CELL / 2, cz = (bz * BLOCK + 4) * CELL + CELL / 2;
+          if (Math.hypot(cx - p.pos.x, cz - p.pos.z) < 15) this.map.addPOI(cx, cz, kind);
+        }
+      }
+    }
+
+    // slow HUD refresh: pips, timer, team, sanity
+    this.hudTimer -= dt;
+    if (this.hudTimer <= 0) {
+      this.hudTimer = 0.5;
+      const collected = [...this.world.breakers.values()].filter((b) => b.collected).length;
+      this.ui.setPips(collected, BREAKERS_NEEDED);
+      this.ui.setTimer((Date.now() - this.roundStartMs) / 1000);
+      this.ui.setSanity(p.sanity);
+      const team = [{
+        name: 'you', color: '#f5edd2',
+        state: (!p.alive ? 'echo' : p.downed ? 'down' : 'alive') as 'alive' | 'down' | 'echo',
+      }];
+      for (const av of this.avatars.values()) {
+        team.push({
+          name: av.info.name,
+          color: '#' + AVATAR_COLORS[av.info.color % AVATAR_COLORS.length].toString(16).padStart(6, '0'),
+          state: !av.alive ? 'echo' : this.downedIds.has(av.info.id) ? 'down' : 'alive',
+        });
+      }
+      this.ui.setTeam(team);
+    }
+
+    // ragged breathing when the sprint is gone
+    this.audio.breathe(dt, p.alive && !p.downed && p.stamina < 0.35 ? (0.35 - p.stamina) / 0.35 : 0);
 
     // sanity: isolation gnaws, company heals
     if (p.alive) {
@@ -608,7 +794,7 @@ export class Game {
 
     // hud
     this.ui.setStamina(p.stamina);
-    this.map.draw(this.seed, p.pos.x, p.pos.z, p.yaw, this.avatars, now, [...this.world.breakers.values()]);
+    this.map.draw(this.seed, p.pos.x, p.pos.z, p.yaw, this.avatars, now, [...this.world.breakers.values()], this.chalk.marks);
 
     this.fx.render(dt, time);
   };
