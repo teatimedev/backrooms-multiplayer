@@ -17,7 +17,10 @@ export class Player {
   alive = true;
   downed = false;
   adrenaline = false; // set by the game when the entity is close: fear is fuel
+  noise = 0;          // how loud this frame was — the entity can hear it
+  noiseFloor = 0;     // set by game: carrying fuel, wading, etc.
   private eyeH = EYE;
+  private beam: THREE.Mesh;
   frozen = true; // no movement until pointer locked & spawned
   anim: Anim = 0;
   flashlightOn = true;
@@ -33,6 +36,15 @@ export class Player {
   constructor(public camera: THREE.PerspectiveCamera, private seed: number, scene: THREE.Scene) {
     this.flashlight = new THREE.SpotLight(0xfff6e0, 42, 32, 0.42, 0.45, 1.5);
     scene.add(this.flashlight, this.flashlight.target);
+    // visible volumetric-ish cone riding the beam
+    const beamGeo = new THREE.ConeGeometry(1.7, 11, 12, 1, true);
+    beamGeo.translate(0, -5.5, 0);
+    beamGeo.rotateX(-Math.PI / 2);
+    this.beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({
+      color: 0xfff3c9, transparent: true, opacity: 0.014,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+    }));
+    scene.add(this.beam);
 
     addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
@@ -139,5 +151,12 @@ export class Player {
     fl.position.copy(cam.position).addScaledVector(r, 0.18).add(new THREE.Vector3(0, -0.12, 0));
     const targetPos = cam.position.clone().addScaledVector(dir, 12);
     fl.target.position.lerp(targetPos, Math.min(1, dt * 14));
+    this.beam.visible = fl.visible;
+    this.beam.position.copy(fl.position);
+    this.beam.lookAt(fl.target.position);
+
+    // how loud were you just now
+    const base = !this.alive ? 0 : this.sprinting ? 1 : hSpeed > 0.5 ? (this.downed ? 0.3 : 0.45) : 0.08;
+    this.noise = Math.min(1, Math.max(base, this.noiseFloor));
   }
 }

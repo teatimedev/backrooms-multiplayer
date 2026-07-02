@@ -31,6 +31,8 @@ export class Avatar {
   group = new THREE.Group();
   headlamp: THREE.SpotLight;
   alive = true;
+  carrying = false; // level 1: hauling a fuel canister
+  private can: THREE.Mesh;
   private snaps: Snap[] = [];
   private head: THREE.Group;
   private legL: THREE.Mesh; private legR: THREE.Mesh;
@@ -39,7 +41,7 @@ export class Avatar {
   private swingT = 0;
   private losTimer = 0;
   private tagOpacity = 0;
-  lastState: StateTuple = [0, 1.6, 0, 0, 0, 0];
+  lastState: StateTuple = [0, 1.6, 0, 0, 0, 0, 0];
 
   constructor(public info: PlayerInfo, scene: THREE.Scene) {
     const col = AVATAR_COLORS[info.color % AVATAR_COLORS.length];
@@ -79,6 +81,22 @@ export class Avatar {
     this.headlamp.position.y = 1.62;
     this.group.add(this.headlamp, this.headlamp.target);
     this.headlamp.target.position.set(0, 1.3, -8);
+    // their beam, visible from across a dark hall — the emotional beacon
+    const beamGeo = new THREE.ConeGeometry(2.0, 9, 10, 1, true);
+    beamGeo.translate(0, -4.5, 0);
+    beamGeo.rotateX(-Math.PI / 2);
+    const beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({
+      color: 0xfff3c9, transparent: true, opacity: 0.03,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+    }));
+    beam.position.set(0, 1.62, -0.2);
+    this.headlamp.add(beam); // inherits visibility with the lamp
+
+    this.can = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.42, 0.22),
+      new THREE.MeshStandardMaterial({ color: 0xa8281e, roughness: 0.5, metalness: 0.3 }));
+    this.can.position.set(0, 1.05, 0.28); // strapped to their back
+    this.can.visible = false;
+    this.group.add(this.can);
 
     scene.add(this.group);
   }
@@ -142,6 +160,7 @@ export class Avatar {
     const mat = this.tag.material as THREE.SpriteMaterial;
     mat.opacity += (this.tagOpacity - mat.opacity) * Math.min(1, dt * 6);
     this.headlamp.visible = this.alive && anim !== 4;
+    this.can.visible = this.carrying && this.alive;
     // sprites ignore group rotation, so keep the tag above a downed body
     this.tag.position.y = anim === 4 ? 0.9 : 2.05;
   }

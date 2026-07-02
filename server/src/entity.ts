@@ -127,10 +127,15 @@ export class Entity {
     const cands = this.candidates(room);
     if (!cands.length) return null;
     if (cands.length === 1) return cands[0];
+    const carriers = room.carrierIds();
+    const valvers = room.valveHolderIds();
     let best: Player | null = null, bestScore = -1;
     for (const p of cands) {
       const score = Math.min(40, this.isolationOf(room, p))
         + (p.id !== this.lastVictim ? 18 : 0)
+        + (p.state[6] ?? 0) * 12          // it hears you
+        + (carriers.has(p.id) ? 14 : 0)   // the fuel sloshes
+        + (valvers.has(p.id) ? 16 : 0)    // holding still, holding a valve
         + Math.random() * 8;
       if (score > bestScore) { bestScore = score; best = p; }
     }

@@ -14,7 +14,7 @@ const ZOOMS = [4.5, 7, 11];
 export interface POI { x: number; z: number; kind: string }
 
 const POI_GLYPH: Record<string, string> = {
-  vending: 'V', door: 'D', shrine: 'S', writing: 'W', chair: 'C', cabinets: 'F',
+  vending: 'V', door: 'D', shrine: 'S', writing: 'W', chair: 'C', cabinets: 'F', hub: 'G',
 };
 
 export class MentalMap {

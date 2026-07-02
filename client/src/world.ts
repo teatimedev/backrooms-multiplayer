@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import {
   BLOCK, CELL, WALL_H, LOW_WALL_H, WALL_HALF_T,
   blockArchetype, blockDark, landmarkKind, wallN, wallW, pillarAt, shelfAt,
-  fixtureAt, fixtureDead, almondAt, exitPos, breakerSpots, roundModifier,
+  fixtureAt, fixtureDead, almondAt, exitPos, hubPos, breakerSpots, roundModifier, resolveCollision,
 } from '@shared/worldgen';
 import { hash2, rand01, mulberry32 } from '@shared/rng';
 import * as tx from './textures';
@@ -77,6 +77,11 @@ export class World {
   powered = false;
   blackoutUntil = 0;
   doors: { x: number; z: number; slab: THREE.Mesh; brick: THREE.Mesh; opened: boolean }[] = [];
+  canisters = new Map<string, { x: number; z: number; holder: string | null; delivered: boolean; mesh: THREE.Group }>();
+  valves = new Map<string, { x: number; z: number; wheel: THREE.Mesh | null }>();
+  hub: { x: number; z: number };
+  private extras: THREE.Object3D[] = []; // scene-level objects that outlive chunks
+  private genLights: THREE.Mesh[] = [];
   private waterMeshes: THREE.Mesh[] = [];
   private wet: boolean; // flood modifier or poolrooms: pool blocks hold water
 
@@ -90,19 +95,27 @@ export class World {
   private tmpM = new THREE.Matrix4();
   private tmpC = new THREE.Color();
 
-  constructor(scene: THREE.Scene, seed: number, taken: string[], collectedBreakers: string[] = [], depth = 0) {
+  constructor(scene: THREE.Scene, seed: number, taken: string[], collectedBreakers: string[] = [], depth = 0,
+    powered = false, canisters: { id: string; x: number; z: number; holder: string | null; delivered: boolean }[] = []) {
     this.scene = scene;
     this.seed = seed;
     this.depth = depth;
     this.theme = THEMES[Math.min(depth, THEMES.length - 1)];
     this.taken = new Set(taken);
     this.exit = exitPos(seed);
+    this.hub = hubPos(seed);
     this.wet = depth >= 2 || roundModifier(seed) === 'flood';
     const collected = new Set(collectedBreakers);
-    for (const b of breakerSpots(seed)) {
-      this.breakers.set(b.id, { id: b.id, x: b.x, z: b.z, collected: collected.has(b.id), lever: null, strip: null, light: null });
+    const spots = breakerSpots(seed);
+    if (depth === 0) {
+      for (const b of spots) {
+        this.breakers.set(b.id, { id: b.id, x: b.x, z: b.z, collected: collected.has(b.id), lever: null, strip: null, light: null });
+      }
+    } else if (depth === 2) {
+      this.valves.set(spots[0].id, { x: spots[0].x, z: spots[0].z, wheel: null });
+      this.valves.set(spots[1].id, { x: spots[1].x, z: spots[1].z, wheel: null });
     }
-    this.powered = collected.size >= 3;
+    this.powered = powered;
     const wallpaper = new THREE.MeshStandardMaterial({ map: tx.wallpaperTex(), roughness: 0.92 });
     const concrete = new THREE.MeshStandardMaterial({ map: tx.concreteTex(), roughness: 0.85 });
     const pool = new THREE.MeshStandardMaterial({ map: tx.poolTileTex(), roughness: 0.3, metalness: 0.06 });
@@ -129,6 +142,78 @@ export class World {
       junk: new THREE.MeshStandardMaterial({ color: 0x5c4f38, roughness: 0.95 }),
       desk: new THREE.MeshStandardMaterial({ color: 0x4a4034, roughness: 0.7 }),
     };
+    // level 1: fuel canisters are world objects that outlive chunks
+    if (depth === 1) {
+      const src = canisters.length ? canisters : spots.map((s) => ({ id: s.id, x: s.x, z: s.z, holder: null, delivered: false }));
+      for (const c of src) {
+        const mesh = this.buildCanister();
+        mesh.position.set(c.x, 0, c.z);
+        mesh.visible = !c.holder && !c.delivered;
+        scene.add(mesh);
+        this.extras.push(mesh);
+        this.canisters.set(c.id, { x: c.x, z: c.z, holder: c.holder, delivered: c.delivered, mesh });
+      }
+    }
+  }
+
+  private buildCanister(): THREE.Group {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.44, 0.24),
+      new THREE.MeshStandardMaterial({ color: 0xa8281e, roughness: 0.5, metalness: 0.3 }));
+    body.position.y = 0.22;
+    const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.1, 6),
+      new THREE.MeshStandardMaterial({ color: 0x333333 }));
+    spout.position.set(0.1, 0.48, 0);
+    const glow = new THREE.PointLight(0xff6a3a, 0.7, 6, 1.8);
+    glow.position.y = 0.5;
+    g.add(body, spout, glow);
+    return g;
+  }
+
+  setCanister(id: string, holder: string | null, delivered: boolean, x?: number, z?: number): void {
+    const c = this.canisters.get(id);
+    if (!c) return;
+    c.holder = holder;
+    c.delivered = delivered;
+    if (x !== undefined && z !== undefined) { c.x = x; c.z = z; c.mesh.position.set(x, 0, z); }
+    c.mesh.visible = !holder && !delivered;
+  }
+
+  setGeneratorLights(delivered: number): void {
+    this.genLights.forEach((m, i) => {
+      (m.material as THREE.MeshBasicMaterial).color.setHex(i < delivered ? 0x4dff88 : 0x552211);
+    });
+  }
+
+  setValveWheel(id: string, progress: number): void {
+    const v = this.valves.get(id);
+    if (v?.wheel) v.wheel.rotation.z = progress * Math.PI * 4;
+  }
+
+  /** Someone died here, once. The backrooms remember. */
+  spawnCorpse(x: number, z: number, name: string, colorHex: number): void {
+    const solved = resolveCollision(this.seed, x, z, 0.6);
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.22, 1.3),
+      new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.95 }));
+    body.position.y = 0.11;
+    body.rotation.y = rand01(hash2(this.seed, Math.round(x), Math.round(z), 88)) * Math.PI;
+    const scrawl = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.45),
+      new THREE.MeshBasicMaterial({ map: tx.chalkWriting(name), transparent: true, depthWrite: false }));
+    scrawl.rotation.x = -Math.PI / 2;
+    scrawl.position.set(0.8, 0.02, 0);
+    g.add(body, scrawl);
+    g.position.set(solved.x, 0, solved.z);
+    this.scene.add(g);
+    this.extras.push(g);
+  }
+
+  /** Full teardown when a round ends and the maze is replaced. */
+  dispose(): void {
+    for (const chunk of this.chunks.values()) this.scene.remove(chunk.group);
+    for (const e of this.extras) this.scene.remove(e);
+    this.chunks.clear();
+    this.extras = [];
   }
 
   /** All meshes a chalk raycast may hit (walls + floors + ceilings). */
@@ -582,6 +667,94 @@ export class World {
       this.exitLight = new THREE.PointLight(0xbfe8ff, this.powered ? 2.6 : 0, 18, 1.6);
       this.exitLight.position.set(cx, 2.9, cz);
       group.add(this.exitLight);
+      return;
+    }
+    if (kind === 'hub') {
+      if (this.depth === 1) {
+        // THE GENERATOR: a machine the size of a van, waiting for fuel
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2e3c34, roughness: 0.5, metalness: 0.55 });
+        const body = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.6, 1.4), bodyMat);
+        body.position.set(cx, 0.8, cz);
+        group.add(body);
+        for (const s of [-0.7, 0.7]) {
+          const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.4, 8), bodyMat);
+          pipe.position.set(cx + s, 2.2, cz - 0.4);
+          group.add(pipe);
+        }
+        this.genLights = [];
+        for (let i = 0; i < 3; i++) {
+          const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.06),
+            new THREE.MeshBasicMaterial({ color: 0x552211 }));
+          bulb.position.set(cx - 0.5 + i * 0.5, 1.35, cz + 0.72);
+          group.add(bulb);
+          this.genLights.push(bulb);
+        }
+        const glow = new THREE.PointLight(0xffc98a, 1.6, 13, 1.6);
+        glow.position.set(cx, 2.4, cz);
+        group.add(glow);
+        // it, too, gets a beacon — the objective anchor of the level
+        const shaft = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.9, 1.3, WALL_H, 10, 1, true),
+          new THREE.MeshBasicMaterial({
+            color: 0xffc98a, transparent: true, opacity: 0.05,
+            blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+          }));
+        shaft.position.set(cx, WALL_H / 2, cz);
+        group.add(shaft);
+      } else {
+        // elsewhere the hub is just a supply cache someone abandoned
+        for (let i = 0; i < 4; i++) {
+          const crate = new THREE.Mesh(this.wallGeo, this.mats.junk);
+          const s = 0.5 + rnd() * 0.3;
+          crate.scale.set(s, s * 0.8, s);
+          crate.position.set(cx - 1 + rnd() * 2, s * 0.4, cz - 1 + rnd() * 2);
+          crate.rotation.y = rnd() * Math.PI;
+          group.add(crate);
+        }
+      }
+      return;
+    }
+    if (kind === 'breaker' && this.depth === 1) {
+      // fuel pickup site: an oil-stained pallet where the can waits
+      const pallet = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 1.0), this.mats.junk);
+      pallet.position.set(cx, 0.05, cz);
+      group.add(pallet);
+      const stain = new THREE.Mesh(new THREE.CircleGeometry(1.1, 12),
+        new THREE.MeshStandardMaterial({ color: 0x14100c, roughness: 0.4, transparent: true, opacity: 0.7 }));
+      stain.rotation.x = -Math.PI / 2;
+      stain.position.set(cx + 0.4, 0.011, cz + 0.3);
+      group.add(stain);
+      return;
+    }
+    if (kind === 'breaker' && this.depth === 2) {
+      const id = `${bx}:${bz}`;
+      const v = this.valves.get(id);
+      if (!v) {
+        // the third spot in the poolrooms: a drowned shrine
+        const b = this.buildBottle();
+        b.position.set(cx, 0.1, cz);
+        group.add(b);
+        return;
+      }
+      // drain valve: a rusted wheel on a standpipe
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 1.2, 8),
+        new THREE.MeshStandardMaterial({ color: 0x5a4436, roughness: 0.6, metalness: 0.5 }));
+      pipe.position.set(cx, 0.6, cz);
+      group.add(pipe);
+      const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.06, 8, 18),
+        new THREE.MeshStandardMaterial({ color: 0x8a2e1e, roughness: 0.5, metalness: 0.4 }));
+      wheel.position.set(cx, 1.25, cz);
+      wheel.rotation.x = Math.PI / 2;
+      group.add(wheel);
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.55, 0.85, WALL_H, 10, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0x7ad8ff, transparent: true, opacity: 0.05,
+          blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+        }));
+      shaft.position.set(cx, WALL_H / 2, cz);
+      group.add(shaft);
+      v.wheel = wheel;
       return;
     }
     if (kind === 'breaker') {

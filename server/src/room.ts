@@ -1,8 +1,11 @@
 import type { WebSocket } from 'ws';
 import { fnv } from '../../shared/src/rng.js';
-import { exitPos, spawnPoint, almondAt, breakerSpots, BREAKERS_NEEDED } from '../../shared/src/worldgen.js';
+import { exitPos, hubPos, spawnPoint, almondAt, breakerSpots, BREAKERS_NEEDED } from '../../shared/src/worldgen.js';
 import { REVIVE_TIME, REVIVE_RANGE, BLEED_OUT_HELPED, BLEED_OUT_SOLO } from '../../shared/src/protocol.js';
-import type { Mark, PlayerInfo, S2C, StateTuple } from '../../shared/src/protocol.js';
+import type { Canister, Mark, PlayerInfo, S2C, StateTuple } from '../../shared/src/protocol.js';
+
+const VALVE_HOLD_SECS = 6;
+const VALVE_RANGE = 3.5;
 import { Entity } from './entity.js';
 
 const TICK_MS = 100;         // 10Hz sim + state broadcast
@@ -38,6 +41,12 @@ export class Room {
   taken = new Set<string>();
   breakers = new Set<string>();
   intel = new Set<string>();
+  powered = false;
+  // level 1: fuel canisters → generator. level 2: twin drain valves.
+  canisters = new Map<string, Canister>();
+  valveHolders = new Map<string, Set<string>>();
+  valveP = 0;
+  deaths: { x: number; z: number; name: string; color: number; round: number }[] = [];
   entity = new Entity();
   status: 'playing' | 'won' | 'wiped' = 'playing';
   private createdAt = Date.now();
@@ -48,7 +57,44 @@ export class Room {
 
   constructor(public code: string) {
     this.seed = fnv(`${code}:1`);
+    this.initObjective();
     this.timer = setInterval(() => this.tick(), TICK_MS);
+  }
+
+  private initObjective(): void {
+    this.powered = false;
+    this.breakers.clear();
+    this.canisters.clear();
+    this.valveHolders.clear();
+    this.valveP = 0;
+    const spots = breakerSpots(this.seed);
+    if (this.depth === 1) {
+      for (const s of spots) this.canisters.set(s.id, { id: s.id, x: s.x, z: s.z, holder: null, delivered: false });
+    } else if (this.depth === 2) {
+      this.valveHolders.set(spots[0].id, new Set());
+      this.valveHolders.set(spots[1].id, new Set());
+    }
+  }
+
+  private setPowered(): void {
+    if (this.powered) return;
+    this.powered = true;
+    const ex = exitPos(this.seed);
+    this.broadcast({ t: 'powered' });
+    this.broadcast({ t: 'flicker', x: ex.x, z: ex.z, r: 45 });
+    this.entity.enrage();
+  }
+
+  carrierIds(): Set<string> {
+    const s = new Set<string>();
+    for (const c of this.canisters.values()) if (c.holder) s.add(c.holder);
+    return s;
+  }
+
+  valveHolderIds(): Set<string> {
+    const s = new Set<string>();
+    for (const hs of this.valveHolders.values()) for (const id of hs) s.add(id);
+    return s;
   }
 
   ageSec(): number { return (Date.now() - this.roundStart) / 1000; }
@@ -61,7 +107,7 @@ export class Room {
     const p: Player = {
       id, ws, name: name.slice(0, 16) || 'anon', color: color & 7,
       alive: this.status === 'playing', spawnIndex,
-      state: [sp.x, 1.6, sp.z, 0, 0, 0], hasState: false, lastFlick: 0, shining: false,
+      state: [sp.x, 1.6, sp.z, 0, 0, 0, 0], hasState: false, lastFlick: 0, shining: false,
       downed: false, downedAt: 0, reviveProgress: 0, revivers: new Set(), selfSaved: false,
     };
     this.players.set(id, p);
@@ -71,6 +117,7 @@ export class Room {
       t: 'joined', you: id, code: this.code, seed: this.seed, round: this.round, depth: this.depth,
       spawn: [sp.x, sp.z], players: [...this.players.values()].map(info),
       marks: this.marks, taken: [...this.taken], breakers: [...this.breakers],
+      canisters: [...this.canisters.values()], powered: this.powered, deaths: this.deaths,
     });
     this.broadcast({ t: 'pj', p: info(p) }, id);
     return p;
@@ -79,6 +126,8 @@ export class Room {
   removePlayer(id: string): void {
     const p = this.players.get(id);
     if (!p) return;
+    this.dropCarried(id);
+    for (const hs of this.valveHolders.values()) hs.delete(id);
     this.players.delete(id);
     for (const q of this.players.values()) q.revivers.delete(id);
     this.broadcast({ t: 'pl', id, name: p.name });
@@ -90,7 +139,9 @@ export class Room {
     switch (msg.t) {
       case 'state': {
         const s = msg.s as StateTuple;
-        if (!Array.isArray(s) || s.length !== 6 || s.some((v) => typeof v !== 'number' || !isFinite(v))) return;
+        const arr = s as unknown as number[];
+        if (!Array.isArray(arr) || arr.length < 6 || arr.length > 7 || arr.some((v) => typeof v !== 'number' || !isFinite(v))) return;
+        if (arr.length === 6) arr.push(0); // legacy clients: silent
         p.state = s;
         p.hasState = true;
         break;
@@ -114,19 +165,36 @@ export class Room {
         break;
       }
       case 'breaker': {
+        if (this.depth !== 0) return;
         const id = String(msg.id);
         if (this.breakers.has(id) || !p.alive || this.status !== 'playing') return;
         const spot = breakerSpots(this.seed).find((b) => b.id === id);
         if (!spot || Math.hypot(spot.x - p.state[0], spot.z - p.state[2]) > 4.5) return;
         this.breakers.add(id);
         this.broadcast({ t: 'breaker', id, by: p.id, left: BREAKERS_NEEDED - this.breakers.size });
-        if (this.breakers.size >= BREAKERS_NEEDED) {
-          // the exit wakes — and so does everything else
-          const ex = exitPos(this.seed);
-          this.broadcast({ t: 'powered' });
-          this.broadcast({ t: 'flicker', x: ex.x, z: ex.z, r: 45 });
-          this.entity.enrage();
-        }
+        if (this.breakers.size >= BREAKERS_NEEDED) this.setPowered();
+        break;
+      }
+      case 'grab': {
+        if (this.depth !== 1 || this.status !== 'playing' || !p.alive || p.downed) return;
+        const c = this.canisters.get(String(msg.id));
+        if (!c || c.delivered || c.holder) return;
+        if (this.carrierIds().has(p.id)) return; // one can at a time
+        if (Math.hypot(c.x - p.state[0], c.z - p.state[2]) > 3.2) return;
+        c.holder = p.id;
+        this.broadcast({ t: 'grab', id: c.id, by: p.id });
+        break;
+      }
+      case 'dropfuel': {
+        this.dropCarried(p.id);
+        break;
+      }
+      case 'valve': {
+        if (this.depth !== 2 || this.status !== 'playing') return;
+        const hs = this.valveHolders.get(String(msg.id));
+        if (!hs) return;
+        if (msg.on === true && p.alive && !p.downed) hs.add(p.id);
+        else hs.delete(p.id);
         break;
       }
       case 'shine': {
@@ -213,10 +281,23 @@ export class Room {
     }
   }
 
+  /** Downed or disconnected carriers spill their fuel where they fall. */
+  private dropCarried(pid: string): void {
+    for (const c of this.canisters.values()) {
+      if (c.holder !== pid) continue;
+      const p = this.players.get(pid);
+      c.holder = null;
+      if (p) { c.x = p.state[0]; c.z = p.state[2]; }
+      this.broadcast({ t: 'fueldrop', id: c.id, x: c.x, z: c.z });
+    }
+  }
+
   /** The entity caught someone: downed, not dead. Teammates can revive. */
   downPlayer(id: string): void {
     const p = this.players.get(id);
     if (!p || !p.alive || p.downed) return;
+    this.dropCarried(id);
+    for (const hs of this.valveHolders.values()) hs.delete(id);
     p.downed = true;
     p.downedAt = Date.now();
     p.reviveProgress = 0;
@@ -230,6 +311,9 @@ export class Room {
     if (!p || !p.alive) return;
     p.alive = false;
     p.downed = false;
+    // the backrooms keep what they take: this body is findable next round
+    this.deaths.push({ x: p.state[0], z: p.state[2], name: p.name, color: p.color, round: this.round });
+    if (this.deaths.length > 30) this.deaths.shift();
     this.broadcast({ t: 'dead', id });
     this.checkEndConditions();
   }
@@ -281,10 +365,53 @@ export class Room {
     }
   }
 
+  /** Level-specific objective progress, run every tick. */
+  private updateObjective(): void {
+    if (this.powered) return;
+    if (this.depth === 1) {
+      const hub = hubPos(this.seed);
+      let delivered = 0;
+      for (const c of this.canisters.values()) {
+        if (c.delivered) { delivered++; continue; }
+        if (!c.holder) continue;
+        const carrier = this.players.get(c.holder);
+        if (!carrier || !carrier.alive || carrier.downed) { this.dropCarried(c.holder); continue; }
+        c.x = carrier.state[0]; c.z = carrier.state[2]; // fuel travels with its carrier
+        if (Math.hypot(c.x - hub.x, c.z - hub.z) < 4.5) {
+          c.delivered = true;
+          c.holder = null;
+          delivered++;
+          this.broadcast({ t: 'fuel', id: c.id, by: carrier.id, left: this.canisters.size - delivered });
+        }
+      }
+      if (delivered >= this.canisters.size && this.canisters.size > 0) this.setPowered();
+    } else if (this.depth === 2) {
+      const spots = breakerSpots(this.seed);
+      const alive = [...this.players.values()].filter((q) => q.alive && !q.downed && q.hasState);
+      const required = alive.length >= 2 ? 2 : 1;
+      let held = 0, holders = 0;
+      for (const [id, hs] of this.valveHolders) {
+        const spot = spots.find((s) => s.id === id);
+        if (!spot) continue;
+        for (const pid of hs) {
+          const q = this.players.get(pid);
+          if (!q || !q.alive || q.downed || Math.hypot(spot.x - q.state[0], spot.z - q.state[2]) > VALVE_RANGE) hs.delete(pid);
+        }
+        if (hs.size > 0) { held++; holders += hs.size; }
+      }
+      const prev = this.valveP;
+      if (held >= required) this.valveP = Math.min(1, this.valveP + (TICK_MS / 1000) / VALVE_HOLD_SECS);
+      else this.valveP = Math.max(0, this.valveP - (TICK_MS / 1000) / (VALVE_HOLD_SECS * 2));
+      if (this.valveP !== prev) this.broadcast({ t: 'vp', p: this.valveP, holders });
+      if (this.valveP >= 1) this.setPowered();
+    }
+  }
+
   private tick(): void {
     if (this.status === 'playing') {
       this.entity.update(this, TICK_MS / 1000);
       this.updateDowned();
+      this.updateObjective();
       this.checkWin();
     }
     // state broadcast
@@ -299,7 +426,7 @@ export class Room {
   }
 
   private checkWin(): void {
-    if (this.breakers.size < BREAKERS_NEEDED) return; // no power, no exit
+    if (!this.powered) return; // no power, no exit
     const alive = [...this.players.values()].filter((p) => p.alive && p.hasState);
     if (!alive.length) return;
     const ex = exitPos(this.seed);
@@ -315,8 +442,8 @@ export class Room {
     this.seed = fnv(`${this.code}:${this.round}`);
     this.marks = [];
     this.taken.clear();
-    this.breakers.clear();
     this.intel.clear();
+    this.initObjective();
     this.entity.reset();
     this.status = 'playing';
     this.roundStart = Date.now();
@@ -329,8 +456,8 @@ export class Room {
       p.hasState = false;
       p.spawnIndex = i++;
       const sp = spawnPoint(this.seed, p.spawnIndex);
-      p.state = [sp.x, 1.6, sp.z, 0, 0, 0];
-      this.sendTo(p.id, { t: 'round', seed: this.seed, round: this.round, depth: this.depth, spawn: [sp.x, sp.z] });
+      p.state = [sp.x, 1.6, sp.z, 0, 0, 0, 0];
+      this.sendTo(p.id, { t: 'round', seed: this.seed, round: this.round, depth: this.depth, spawn: [sp.x, sp.z], deaths: this.deaths });
     }
   }
 

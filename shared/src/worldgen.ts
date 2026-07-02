@@ -15,7 +15,7 @@ export const WALL_HALF_T = 0.14;
 export const PLAYER_R = 0.35;
 
 export type Archetype = 'plain' | 'rooms' | 'corridors' | 'pillars' | 'cubicles' | 'storage' | 'pool' | 'landmark';
-export type LandmarkKind = 'chair' | 'cabinets' | 'writing' | 'shrine' | 'vending' | 'door' | 'breaker' | 'exit';
+export type LandmarkKind = 'chair' | 'cabinets' | 'writing' | 'shrine' | 'vending' | 'door' | 'breaker' | 'hub' | 'exit';
 
 /** Breaker panels that must all be pulled before the exit has power. */
 export const BREAKERS_NEEDED = 3;
@@ -53,6 +53,7 @@ export const MODIFIER_INFO: Record<Modifier, { name: string; blurb: string }> = 
 export interface Layout {
   exit: { bx: number; bz: number };
   breakers: { bx: number; bz: number; id: string }[];
+  hub: { bx: number; bz: number }; // generator site on level 1, supply cache elsewhere
 }
 
 const layoutCache = new Map<number, Layout>();
@@ -78,9 +79,20 @@ export function layout(seed: number): Layout {
     while (breakers.some((o) => o.bx === bx && o.bz === bz)) bx += 1;
     breakers.push({ bx, bz, id: `${bx}:${bz}` });
   }
-  l = { exit: { bx: ebx, bz: ebz }, breakers };
+  // the hub: close to the middle of everything, where the machine waits
+  const ha = r2(seed, 8, 8, 94) * Math.PI * 2;
+  let hbx = Math.round(Math.cos(ha) * 2);
+  let hbz = Math.round(Math.sin(ha) * 2);
+  if ((hbx === ebx && hbz === ebz) || breakers.some((o) => o.bx === hbx && o.bz === hbz)) hbx += 1;
+  l = { exit: { bx: ebx, bz: ebz }, breakers, hub: { bx: hbx, bz: hbz } };
   layoutCache.set(seed, l);
   return l;
+}
+
+/** World-space centre of the hub (level-1 generator). */
+export function hubPos(seed: number): { x: number; z: number } {
+  const h = layout(seed).hub;
+  return { x: (h.bx * BLOCK + 4) * CELL + CELL / 2, z: (h.bz * BLOCK + 4) * CELL + CELL / 2 };
 }
 
 export function exitBlock(seed: number): { bx: number; bz: number } {
@@ -107,6 +119,7 @@ export function exitPos(seed: number): { x: number; z: number } {
 export function blockArchetype(seed: number, bx: number, bz: number): Archetype {
   const l = layout(seed);
   if (bx === l.exit.bx && bz === l.exit.bz) return 'landmark';
+  if (bx === l.hub.bx && bz === l.hub.bz) return 'landmark';
   if (l.breakers.some((b) => b.bx === bx && b.bz === bz)) return 'landmark';
   const r = r2(seed, bx, bz, 7);
   if (roundModifier(seed) === 'flood') {
@@ -132,6 +145,7 @@ export function blockArchetype(seed: number, bx: number, bz: number): Archetype 
 export function landmarkKind(seed: number, bx: number, bz: number): LandmarkKind {
   const l = layout(seed);
   if (bx === l.exit.bx && bz === l.exit.bz) return 'exit';
+  if (bx === l.hub.bx && bz === l.hub.bz) return 'hub';
   if (l.breakers.some((b) => b.bx === bx && b.bz === bz)) return 'breaker';
   const kinds: LandmarkKind[] = ['chair', 'cabinets', 'writing', 'shrine', 'vending', 'door'];
   return kinds[hash2(seed, bx, bz, 31) % kinds.length];

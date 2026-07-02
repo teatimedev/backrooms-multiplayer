@@ -1,6 +1,7 @@
 // Wire protocol. JSON messages over a single WebSocket.
-// Player state tuples are [x, y, z, yaw, pitch, anim] to keep packets small.
-// anim: 0 idle, 1 walk, 2 run, 3 echo(dead, flying), 4 downed(crawl).
+// Player state tuples are [x, y, z, yaw, pitch, anim, noise] to keep packets
+// small. anim: 0 idle, 1 walk, 2 run, 3 echo(dead, flying), 4 downed(crawl).
+// noise 0..1: how loud you're being — the entity's targeting can hear it.
 
 export type Anim = 0 | 1 | 2 | 3 | 4;
 
@@ -8,7 +9,10 @@ export const REVIVE_TIME = 4;        // seconds holding E to pick someone up
 export const REVIVE_RANGE = 3.5;     // metres
 export const BLEED_OUT_HELPED = 60;  // downed with living teammates
 export const BLEED_OUT_SOLO = 12;    // downed with nobody left to help
-export type StateTuple = [number, number, number, number, number, Anim];
+export type StateTuple = [number, number, number, number, number, Anim, number];
+
+/** Level-1 objective: fuel canisters carried to the generator. */
+export interface Canister { id: string; x: number; z: number; holder: string | null; delivered: boolean }
 
 export interface PlayerInfo {
   id: string;
@@ -36,6 +40,9 @@ export type C2S =
   | { t: 'chalk'; m: Omit<Mark, 'by'> }
   | { t: 'pickup'; id: string }
   | { t: 'breaker'; id: string }
+  | { t: 'grab'; id: string }
+  | { t: 'dropfuel' }
+  | { t: 'valve'; id: string; on: boolean }
   | { t: 'shine'; on: boolean }
   | { t: 'chat'; text: string }
   | { t: 'rtc'; to: string; data: unknown }
@@ -49,7 +56,7 @@ export type C2S =
   | { t: 'ping'; n: number };
 
 export type S2C =
-  | { t: 'joined'; you: string; code: string; seed: number; round: number; depth: number; spawn: [number, number]; players: PlayerInfo[]; marks: Mark[]; taken: string[]; breakers: string[] }
+  | { t: 'joined'; you: string; code: string; seed: number; round: number; depth: number; spawn: [number, number]; players: PlayerInfo[]; marks: Mark[]; taken: string[]; breakers: string[]; canisters: Canister[]; powered: boolean; deaths: { x: number; z: number; name: string; color: number; round: number }[] }
   | { t: 'err'; msg: string }
   | { t: 'pj'; p: PlayerInfo }
   | { t: 'pl'; id: string; name: string }
@@ -57,6 +64,10 @@ export type S2C =
   | { t: 'chalk'; m: Mark }
   | { t: 'pickup'; id: string; by: string }
   | { t: 'breaker'; id: string; by: string; left: number }
+  | { t: 'grab'; id: string; by: string }
+  | { t: 'fueldrop'; id: string; x: number; z: number }
+  | { t: 'fuel'; id: string; by: string; left: number }
+  | { t: 'vp'; p: number; holders: number }
   | { t: 'marked'; kind: 'breaker' | 'exit'; id: string; by: string }
   | { t: 'powered' }
   | { t: 'retreat'; x: number; z: number }
@@ -70,7 +81,7 @@ export type S2C =
   | { t: 'mimic'; x: number; z: number; kind: 'steps' | 'voice' }
   | { t: 'win'; time: number; final: boolean }
   | { t: 'wipe'; time: number }
-  | { t: 'round'; seed: number; round: number; depth: number; spawn: [number, number] }
+  | { t: 'round'; seed: number; round: number; depth: number; spawn: [number, number]; deaths: { x: number; z: number; name: string; color: number; round: number }[] }
   | { t: 'rtc'; from: string; data: unknown }
   | { t: 'pong'; n: number };
 

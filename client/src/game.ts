@@ -59,6 +59,8 @@ export class Game {
   private depth = 0;
   private bottles = 0;
   private senseTimer = 70;
+  private valveHoldId: string | null = null;
+  private lastVp = 0;
   private myMarked = new Set<string>();
   private stats = { downs: 0, revives: 0, breakers: new Map<string, number>() };
   private radialHeld = false;
@@ -93,7 +95,8 @@ export class Game {
     this.scene.add(this.hemi);
 
     this.depth = joined.depth;
-    this.world = new World(this.scene, this.seed, joined.taken, joined.breakers, this.depth);
+    this.world = new World(this.scene, this.seed, joined.taken, joined.breakers, this.depth, joined.powered, joined.canisters);
+    for (const d of joined.deaths) this.world.spawnCorpse(d.x, d.z, d.name, AVATAR_COLORS[d.color % AVATAR_COLORS.length]);
     this.lights = new LightPool(this.scene);
     this.player = new Player(this.camera, this.seed, this.scene);
     this.player.spawn(joined.spawn[0], joined.spawn[1]);
@@ -118,6 +121,7 @@ export class Game {
       this.names.set(p.id, p.name);
       if (p.id !== this.myId) this.addAvatar(p);
     }
+    if (this.depth === 1) this.map.addPOI(this.world.hub.x, this.world.hub.z, 'hub');
 
     this.bindNet();
     this.bindInput();
@@ -160,12 +164,24 @@ export class Game {
     setTimeout(() => this.ui.toast(`tonight: ${info.name} — ${info.blurb}`, 6000), 2500);
   }
 
+  private get carryingId(): string | null {
+    for (const [id, c] of this.world.canisters) if (c.holder === this.myId) return id;
+    return null;
+  }
+
   private refreshObjective(): void {
     const t = this.world.theme;
-    const left = [...this.world.breakers.values()].filter((b) => !b.collected).length;
     if (this.world.powered) {
       this.ui.setObjective(`${t.name} — the exit is LIVE, get everyone there together`);
+      return;
+    }
+    if (this.depth === 1) {
+      const delivered = [...this.world.canisters.values()].filter((c) => c.delivered).length;
+      this.ui.setObjective(`${t.name} — fuel the generator: ${delivered}/${this.world.canisters.size}${this.carryingId ? ' · YOU have the fuel. it sloshes.' : ''}`);
+    } else if (this.depth === 2) {
+      this.ui.setObjective(`${t.name} — two drain valves, turned at the same time`);
     } else {
+      const left = [...this.world.breakers.values()].filter((b) => !b.collected).length;
       this.ui.setObjective(`${t.name} — restore power: ${BREAKERS_NEEDED - left}/${BREAKERS_NEEDED} breakers`);
     }
   }
@@ -235,7 +251,39 @@ export class Game {
       this.audio.setExitBeacon(this.world.exit.x, this.world.exit.z);
       this.refreshObjective();
       this.player.shake = Math.max(this.player.shake, 0.03);
-      this.ui.toast('THE EXIT HAS POWER. it knows. RUN.', 6000);
+      const line = this.depth === 1 ? 'THE GENERATOR ROARS. everything heard it. RUN.'
+        : this.depth === 2 ? 'THE DRAIN OPENS. the water is leaving — so should you. RUN.'
+          : 'THE EXIT HAS POWER. it knows. RUN.';
+      this.ui.toast(line, 6000);
+    });
+    net.on('grab', (m) => {
+      this.world.setCanister(m.id, m.by, false);
+      this.refreshObjective();
+      if (m.by === this.myId) this.ui.toast('you have the fuel. it sloshes with every step.', 4500);
+      else this.ui.toast(`${this.names.get(m.by) ?? 'someone'} has a fuel can`, 3000);
+    });
+    net.on('fueldrop', (m) => {
+      this.world.setCanister(m.id, null, false, m.x, m.z);
+      this.refreshObjective();
+    });
+    net.on('fuel', (m) => {
+      this.world.setCanister(m.id, null, true);
+      const delivered = [...this.world.canisters.values()].filter((c) => c.delivered).length;
+      this.world.setGeneratorLights(delivered);
+      this.audio.breakerClunk();
+      this.refreshObjective();
+      const name = m.by === this.myId ? 'you' : this.names.get(m.by) ?? '?';
+      this.stats.breakers.set(name, (this.stats.breakers.get(name) ?? 0) + 1);
+      if (m.left > 0) this.ui.toast(`${name} fueled the generator — ${m.left} can${m.left > 1 ? 's' : ''} left`, 4000);
+    });
+    net.on('vp', (m) => {
+      this.lastVp = m.p;
+      for (const id of this.world.valves.keys()) this.world.setValveWheel(id, m.p);
+      if (m.p > 0 && !this.world.powered) {
+        this.ui.setReviveBar(`the valves turn… ${m.holders} holding`, m.p);
+      } else {
+        this.ui.setReviveBar(null, 0);
+      }
     });
     net.on('retreat', (m) => {
       this.audio.retreatShriek(m.x, m.z);
@@ -264,13 +312,17 @@ export class Game {
     });
     net.on('dead', (m) => {
       this.downedIds.delete(m.id);
-      if (m.id === this.myId) this.die();
-      else {
+      if (m.id === this.myId) {
+        this.world.spawnCorpse(this.player.pos.x, this.player.pos.z, 'you', 0x8a8f98);
+        this.die();
+      } else {
         const av = this.avatars.get(m.id);
         if (av) {
           av.alive = false;
           this.map.addDeath(av.lastState[0], av.lastState[2]);
           this.audio.distantThud(av.lastState[0], av.lastState[2]);
+          this.world.spawnCorpse(av.lastState[0], av.lastState[2], av.info.name,
+            AVATAR_COLORS[av.info.color % AVATAR_COLORS.length]);
         }
         this.ui.toast(`${this.names.get(m.id) ?? 'someone'} is gone`, 4500);
       }
@@ -330,23 +382,26 @@ export class Game {
         `the backrooms kept every one of you.<br/>you lasted ${mins}m ${secs}s. only echoes remain.${this.statsLine()}`,
         () => this.net.send({ t: 'restart' }), () => location.reload()), 1200);
     });
-    net.on('round', (m) => this.newRound(m.seed, m.spawn, m.depth));
+    net.on('round', (m) => this.newRound(m.seed, m.spawn, m.depth, m.deaths));
     net.onclose = () => {
       if (!this.disposed) this.ui.showDisconnected();
     };
   }
 
-  private newRound(seed: number, spawn: [number, number], depth: number): void {
+  private newRound(seed: number, spawn: [number, number], depth: number,
+    deaths: { x: number; z: number; name: string; color: number; round: number }[] = []): void {
     this.seed = seed;
     this.depth = depth;
     this.ended = false;
     this.bottles = 0;
+    this.valveHoldId = null;
+    this.lastVp = 0;
     this.ui.closeOverlay();
-    // tear down the old maze
-    for (const key of [...this.world.chunks.keys()]) {
-      this.scene.remove(this.world.chunks.get(key)!.group);
-    }
-    this.world = new World(this.scene, seed, [], [], depth);
+    this.world.dispose(); // tear down the old maze, corpses, canisters
+    this.world = new World(this.scene, seed, [], [], depth, false, []);
+    // the bodies from every previous round are still in here, somewhere
+    for (const d of deaths) this.world.spawnCorpse(d.x, d.z, d.name, AVATAR_COLORS[d.color % AVATAR_COLORS.length]);
+    if (depth === 1) this.map.addPOI(this.world.hub.x, this.world.hub.z, 'hub'); // you can smell the diesel
     this.applyTheme();
     this.player.setSeed(seed);
     this.player.spawn(spawn[0], spawn[1]);
@@ -391,9 +446,20 @@ export class Game {
       t: 'state',
       s: [
         Number(p.pos.x.toFixed(2)), Number(p.pos.y.toFixed(2)), Number(p.pos.z.toFixed(2)),
-        Number(p.yaw.toFixed(3)), Number(p.pitch.toFixed(3)), p.anim,
+        Number(p.yaw.toFixed(3)), Number(p.pitch.toFixed(3)), p.anim, Number(p.noise.toFixed(2)),
       ],
     });
+  }
+
+  /** The level's objective sites, in one shape: breakers, canisters, or valves. */
+  private objectiveSpots(): { id: string; x: number; z: number; collected: boolean }[] {
+    if (this.depth === 1) {
+      return [...this.world.canisters.entries()].map(([id, c]) => ({ id, x: c.x, z: c.z, collected: c.delivered }));
+    }
+    if (this.depth === 2) {
+      return [...this.world.valves.entries()].map(([id, v]) => ({ id, x: v.x, z: v.z, collected: this.world.powered }));
+    }
+    return [...this.world.breakers.values()].map((b) => ({ id: b.id, x: b.x, z: b.z, collected: b.collected }));
   }
 
   // ---------------------------------------------------------------- input
@@ -467,11 +533,30 @@ export class Game {
             break;
           }
           let pulled = false;
-          for (const b of this.world.breakers.values()) {
-            if (!b.collected && Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z) < 2.6) {
-              this.net.send({ t: 'breaker', id: b.id });
-              pulled = true;
-              break;
+          if (this.depth === 1 && !this.carryingId) {
+            for (const [id, c] of this.world.canisters) {
+              if (!c.holder && !c.delivered && Math.hypot(c.x - this.player.pos.x, c.z - this.player.pos.z) < 2.6) {
+                this.net.send({ t: 'grab', id });
+                pulled = true;
+                break;
+              }
+            }
+          } else if (this.depth === 2) {
+            for (const [id, v] of this.world.valves) {
+              if (Math.hypot(v.x - this.player.pos.x, v.z - this.player.pos.z) < 3.2) {
+                this.valveHoldId = id;
+                this.net.send({ t: 'valve', id, on: true });
+                pulled = true;
+                break;
+              }
+            }
+          } else {
+            for (const b of this.world.breakers.values()) {
+              if (!b.collected && Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z) < 2.6) {
+                this.net.send({ t: 'breaker', id: b.id });
+                pulled = true;
+                break;
+              }
             }
           }
           if (!pulled && this.world.tryOpenDoor(this.player.pos.x, this.player.pos.z)) {
@@ -488,6 +573,12 @@ export class Game {
             this.bottles--;
             this.audio.pickup();
             this.drink();
+          }
+          break;
+        case 'KeyG':
+          if (this.player.alive && this.carryingId) {
+            this.net.send({ t: 'dropfuel' });
+            this.ui.toast('fuel set down — remember where', 3000);
           }
           break;
         case 'KeyV':
@@ -512,6 +603,10 @@ export class Game {
           break;
         case 'KeyE':
           this.stopReviving();
+          if (this.valveHoldId) {
+            this.net.send({ t: 'valve', id: this.valveHoldId, on: false });
+            this.valveHoldId = null;
+          }
           break;
         case 'KeyC':
           if (this.radialHeld) {
@@ -545,10 +640,11 @@ export class Game {
     let tx = this.world.exit.x, tz = this.world.exit.z, what = 'the way out';
     if (!this.world.powered) {
       let best = Infinity;
-      for (const b of this.world.breakers.values()) {
-        if (b.collected) continue;
-        const d = Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z);
-        if (d < best) { best = d; tx = b.x; tz = b.z; what = 'a breaker'; }
+      const label = this.depth === 1 ? 'fuel' : this.depth === 2 ? 'a valve' : 'a breaker';
+      for (const s of this.objectiveSpots()) {
+        if (s.collected) continue;
+        const d = Math.hypot(s.x - this.player.pos.x, s.z - this.player.pos.z);
+        if (d < best) { best = d; tx = s.x; tz = s.z; what = label; }
       }
     }
     this.map.pulse = {
@@ -731,27 +827,27 @@ export class Game {
       this.glimpse.sync(null); // the real thing displaces the imagined one
     }
 
-    // uncollected breakers spit sparks — follow the sound
+    // objective audio beacons: sparks (L0), and the sense pulse everywhere
     this.sparkTimer -= dt;
     if (this.sparkTimer <= 0) {
       this.sparkTimer = 2.6 + Math.random() * 2.4;
       let nb: { x: number; z: number } | null = null, nd = 38;
-      for (const b of this.world.breakers.values()) {
-        if (b.collected) continue;
-        const d = Math.hypot(b.x - p.pos.x, b.z - p.pos.z);
-        if (d < nd) { nd = d; nb = b; }
+      for (const s of this.objectiveSpots()) {
+        if (s.collected) continue;
+        const d = Math.hypot(s.x - p.pos.x, s.z - p.pos.z);
+        if (d < nd) { nd = d; nb = s; }
       }
-      if (nb) this.audio.spark(nb.x, nb.z);
+      if (nb && this.depth !== 1) this.audio.spark(nb.x, nb.z);
     }
 
-    // share intel: walk near a breaker once and the whole crew's maps learn it
+    // share intel: walk near an objective once and the whole crew's maps learn it
     if (p.alive) {
-      for (const b of this.world.breakers.values()) {
-        if (this.myMarked.has(b.id)) continue;
-        if (Math.hypot(b.x - p.pos.x, b.z - p.pos.z) < 14) {
-          this.myMarked.add(b.id);
-          this.map.knownBreakers.add(b.id);
-          this.net.send({ t: 'mark', kind: 'breaker', id: b.id });
+      for (const s of this.objectiveSpots()) {
+        if (this.myMarked.has(s.id)) continue;
+        if (Math.hypot(s.x - p.pos.x, s.z - p.pos.z) < 14) {
+          this.myMarked.add(s.id);
+          this.map.knownBreakers.add(s.id);
+          this.net.send({ t: 'mark', kind: 'breaker', id: s.id });
         }
       }
     }
@@ -762,10 +858,10 @@ export class Game {
       if (this.senseTimer <= 0) {
         this.senseTimer = 75;
         let tx = 0, tz = 0, best = Infinity;
-        for (const b of this.world.breakers.values()) {
-          if (b.collected) continue;
-          const d = Math.hypot(b.x - p.pos.x, b.z - p.pos.z);
-          if (d < best) { best = d; tx = b.x; tz = b.z; }
+        for (const s of this.objectiveSpots()) {
+          if (s.collected) continue;
+          const d = Math.hypot(s.x - p.pos.x, s.z - p.pos.z);
+          if (d < best) { best = d; tx = s.x; tz = s.z; }
         }
         if (best < Infinity) {
           this.map.pulse = { angle: Math.atan2(tz - p.pos.z, tx - p.pos.x), until: performance.now() / 1000 + 5 };
@@ -774,18 +870,44 @@ export class Game {
       }
     }
 
+    // noise floor: carried fuel sloshes, wading splashes
+    const carrying = this.carryingId !== null;
+    const inWater = this.world.surfaceAt(p.pos.x, p.pos.z) === 'water';
+    const speed = Math.hypot(p.vel.x, p.vel.z);
+    p.noiseFloor = Math.max(carrying ? 0.7 : 0, inWater && speed > 0.6 ? 0.55 : 0);
+
+    // keep avatar fuel-can visuals in sync
+    for (const [id, av] of this.avatars) {
+      av.carrying = [...this.world.canisters.values()].some((c) => c.holder === id);
+    }
+
     // interaction hint: revive beats breaker
     if (p.alive && !p.downed) {
       const downedNear = this.nearestDowned(REVIVE_RANGE - 0.4);
       if (downedNear) {
         this.ui.setHint(`hold E — bring ${this.names.get(downedNear) ?? 'them'} back`);
       } else {
-        let nearBreaker = false;
-        for (const b of this.world.breakers.values()) {
-          if (!b.collected && Math.hypot(b.x - p.pos.x, b.z - p.pos.z) < 2.6) { nearBreaker = true; break; }
+        let hint = '';
+        if (this.depth === 1) {
+          if (this.carryingId) {
+            const hd = Math.hypot(this.world.hub.x - p.pos.x, this.world.hub.z - p.pos.z);
+            hint = hd < 25 ? 'the generator is close — bring it in' : 'G — set the fuel down';
+          } else {
+            for (const c of this.world.canisters.values()) {
+              if (!c.holder && !c.delivered && Math.hypot(c.x - p.pos.x, c.z - p.pos.z) < 2.6) { hint = 'E — take the fuel can'; break; }
+            }
+          }
+        } else if (this.depth === 2) {
+          for (const v of this.world.valves.values()) {
+            if (!this.world.powered && Math.hypot(v.x - p.pos.x, v.z - p.pos.z) < 3.2) { hint = 'hold E — turn the valve (both at once)'; break; }
+          }
+        } else {
+          for (const b of this.world.breakers.values()) {
+            if (!b.collected && Math.hypot(b.x - p.pos.x, b.z - p.pos.z) < 2.6) { hint = 'E — pull the breaker'; break; }
+          }
         }
-        this.ui.setHint(nearBreaker ? 'E — pull the breaker'
-          : this.world.nearUnopenedDoor(p.pos.x, p.pos.z) ? 'E — it says NOT AN EXIT' : '');
+        if (!hint && this.world.nearUnopenedDoor(p.pos.x, p.pos.z)) hint = 'E — it says NOT AN EXIT';
+        this.ui.setHint(hint);
       }
     } else {
       this.ui.setHint('');
@@ -850,8 +972,8 @@ export class Game {
     this.hudTimer -= dt;
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.5;
-      const collected = [...this.world.breakers.values()].filter((b) => b.collected).length;
-      this.ui.setPips(collected, BREAKERS_NEEDED);
+      const spots = this.objectiveSpots();
+      this.ui.setPips(spots.filter((s) => s.collected).length, spots.length || BREAKERS_NEEDED);
       this.ui.setTimer((Date.now() - this.roundStartMs) / 1000);
       this.ui.setSanity(p.sanity);
       this.ui.setBottles(this.bottles);
@@ -923,7 +1045,7 @@ export class Game {
 
     // hud
     this.ui.setStamina(p.stamina);
-    this.map.draw(this.seed, p.pos.x, p.pos.z, p.yaw, this.avatars, now, [...this.world.breakers.values()], this.chalk.marks,
+    this.map.draw(this.seed, p.pos.x, p.pos.z, p.yaw, this.avatars, now, this.objectiveSpots(), this.chalk.marks,
       !p.alive && this.entity.active ? { x: this.entity.pos.x, z: this.entity.pos.y } : null);
 
     this.fx.render(dt, time);
