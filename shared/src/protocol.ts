@@ -1,0 +1,58 @@
+// Wire protocol. JSON messages over a single WebSocket.
+// Player state tuples are [x, y, z, yaw, pitch, anim] to keep packets small.
+// anim: 0 idle, 1 walk, 2 run, 3 echo(dead, flying).
+
+export type Anim = 0 | 1 | 2 | 3;
+export type StateTuple = [number, number, number, number, number, Anim];
+
+export interface PlayerInfo {
+  id: string;
+  name: string;
+  color: number;      // palette index
+  alive: boolean;
+  spawnIndex: number;
+}
+
+export interface Mark {
+  x: number; y: number; z: number;
+  nx: number; ny: number; nz: number;  // surface normal
+  rot: number;                          // rotation around normal
+  sym: number;                          // symbol index
+  by: string;
+}
+
+// entity mode: 0 dormant, 1 stalking, 2 hunting
+export type EntityTuple = [number, number, number, string | null];
+
+export type C2S =
+  | { t: 'host'; name: string; color: number }
+  | { t: 'join'; code: string; name: string; color: number }
+  | { t: 'state'; s: StateTuple }
+  | { t: 'chalk'; m: Omit<Mark, 'by'> }
+  | { t: 'pickup'; id: string }
+  | { t: 'chat'; text: string }
+  | { t: 'rtc'; to: string; data: unknown }
+  | { t: 'flick' }
+  | { t: 'restart' }
+  | { t: 'ping'; n: number };
+
+export type S2C =
+  | { t: 'joined'; you: string; code: string; seed: number; round: number; spawn: [number, number]; players: PlayerInfo[]; marks: Mark[]; taken: string[] }
+  | { t: 'err'; msg: string }
+  | { t: 'pj'; p: PlayerInfo }
+  | { t: 'pl'; id: string; name: string }
+  | { t: 's'; p: Record<string, StateTuple>; e: EntityTuple | null }
+  | { t: 'chalk'; m: Mark }
+  | { t: 'pickup'; id: string; by: string }
+  | { t: 'kill'; id: string }
+  | { t: 'chat'; from: string; name: string; text: string }
+  | { t: 'flicker'; x: number; z: number; r: number }
+  | { t: 'mimic'; x: number; z: number; kind: 'steps' | 'voice' }
+  | { t: 'win'; time: number }
+  | { t: 'wipe' }
+  | { t: 'round'; seed: number; round: number; spawn: [number, number] }
+  | { t: 'rtc'; from: string; data: unknown }
+  | { t: 'pong'; n: number };
+
+export const AVATAR_COLORS = [0xd9553b, 0x3f7fbf, 0x53a35a, 0xc9a13f, 0x9a5fc9, 0x3fbfb4, 0xc95f8e, 0x8a8f98];
+export const AVATAR_COLOR_NAMES = ['rust', 'cobalt', 'moss', 'ochre', 'violet', 'teal', 'rose', 'ash'];

@@ -1,0 +1,16 @@
+{
+  "name": "@backrooms/client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.169.0",
+    "vite": "^5.4.11"
+  }
+}
