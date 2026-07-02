@@ -10,7 +10,9 @@ export class Net {
 
   connect(): Promise<void> {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws`;
+    // VITE_WS_URL lets the static client (e.g. on Vercel) point at a game
+    // server hosted elsewhere; default is same-origin (dev proxy / Fly).
+    const url = (import.meta.env.VITE_WS_URL as string | undefined) ?? `${proto}://${location.host}/ws`;
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
       this.ws = ws;

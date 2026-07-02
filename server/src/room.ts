@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 import { fnv } from '../../shared/src/rng.js';
-import { exitPos, spawnPoint, almondAt, BLOCK, CELL } from '../../shared/src/worldgen.js';
+import { exitPos, spawnPoint, almondAt, breakerSpots, BREAKERS_NEEDED } from '../../shared/src/worldgen.js';
 import type { Mark, PlayerInfo, S2C, StateTuple } from '../../shared/src/protocol.js';
 import { Entity } from './entity.js';
 
@@ -20,6 +20,7 @@ export interface Player {
   state: StateTuple;
   hasState: boolean;
   lastFlick: number;
+  shining: boolean;
 }
 
 export class Room {
@@ -28,6 +29,7 @@ export class Room {
   players = new Map<string, Player>();
   marks: Mark[] = [];
   taken = new Set<string>();
+  breakers = new Set<string>();
   entity = new Entity();
   status: 'playing' | 'won' | 'wiped' = 'playing';
   private createdAt = Date.now();
@@ -51,7 +53,7 @@ export class Room {
     const p: Player = {
       id, ws, name: name.slice(0, 16) || 'anon', color: color & 7,
       alive: this.status === 'playing', spawnIndex,
-      state: [sp.x, 1.6, sp.z, 0, 0, 0], hasState: false, lastFlick: 0,
+      state: [sp.x, 1.6, sp.z, 0, 0, 0], hasState: false, lastFlick: 0, shining: false,
     };
     this.players.set(id, p);
     this.emptySince = null;
@@ -59,7 +61,7 @@ export class Room {
     this.sendTo(id, {
       t: 'joined', you: id, code: this.code, seed: this.seed, round: this.round,
       spawn: [sp.x, sp.z], players: [...this.players.values()].map(info),
-      marks: this.marks, taken: [...this.taken],
+      marks: this.marks, taken: [...this.taken], breakers: [...this.breakers],
     });
     this.broadcast({ t: 'pj', p: info(p) }, id);
     return p;
@@ -100,6 +102,26 @@ export class Room {
         if (!a || Math.hypot(a.x - p.state[0], a.z - p.state[2]) > 4) return;
         this.taken.add(id);
         this.broadcast({ t: 'pickup', id, by: p.id });
+        break;
+      }
+      case 'breaker': {
+        const id = String(msg.id);
+        if (this.breakers.has(id) || !p.alive || this.status !== 'playing') return;
+        const spot = breakerSpots(this.seed).find((b) => b.id === id);
+        if (!spot || Math.hypot(spot.x - p.state[0], spot.z - p.state[2]) > 4.5) return;
+        this.breakers.add(id);
+        this.broadcast({ t: 'breaker', id, by: p.id, left: BREAKERS_NEEDED - this.breakers.size });
+        if (this.breakers.size >= BREAKERS_NEEDED) {
+          // the exit wakes — and so does everything else
+          const ex = exitPos(this.seed);
+          this.broadcast({ t: 'powered' });
+          this.broadcast({ t: 'flicker', x: ex.x, z: ex.z, r: 45 });
+          this.entity.enrage();
+        }
+        break;
+      }
+      case 'shine': {
+        p.shining = msg.on === true;
         break;
       }
       case 'chat': {
@@ -153,7 +175,7 @@ export class Room {
     if (!withState.length) return;
     if (withState.every((p) => !p.alive)) {
       this.status = 'wiped';
-      this.broadcast({ t: 'wipe' });
+      this.broadcast({ t: 'wipe', time: Math.round(this.ageSec()) });
     }
   }
 
@@ -174,6 +196,7 @@ export class Room {
   }
 
   private checkWin(): void {
+    if (this.breakers.size < BREAKERS_NEEDED) return; // no power, no exit
     const alive = [...this.players.values()].filter((p) => p.alive && p.hasState);
     if (!alive.length) return;
     const ex = exitPos(this.seed);
@@ -189,6 +212,7 @@ export class Room {
     this.seed = fnv(`${this.code}:${this.round}`);
     this.marks = [];
     this.taken.clear();
+    this.breakers.clear();
     this.entity.reset();
     this.status = 'playing';
     this.roundStart = Date.now();

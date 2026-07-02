@@ -1,0 +1,18 @@
+# Fly.io config — one machine hosts the static client AND all game rooms.
+# Scales to zero when nobody is playing (first visitor wakes it in ~1s).
+app = "backrooms-mp"
+primary_region = "lhr"
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

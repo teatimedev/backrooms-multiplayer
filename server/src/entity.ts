@@ -1,6 +1,6 @@
 // The Entity. Server-authoritative so every player shares one nightmare.
 // It targets the most isolated living player, stalks, then commits.
-import { CELL, cellBlocked, resolveCollision } from '../../shared/src/worldgen.js';
+import { CELL, cellBlocked, losBlocked, resolveCollision } from '../../shared/src/worldgen.js';
 import type { Room, Player } from './room.js';
 
 const SPAWN_GRACE = 45;         // seconds before the first stalk
@@ -58,9 +58,18 @@ export class Entity {
   private repath = 0;
   private flickerCd = 0;
   private mimicCd = 120;
+  private shineAccum = 0;
+  private soloGraceGiven = false;
 
   reset(): void {
-    this.mode = 0; this.targetId = null; this.timer = SPAWN_GRACE; this.aggression = 0; this.path = [];
+    this.mode = 0; this.targetId = null; this.timer = SPAWN_GRACE; this.aggression = 0;
+    this.path = []; this.shineAccum = 0; this.soloGraceGiven = false;
+  }
+
+  /** Power restored: the endgame. It stops being patient. */
+  enrage(): void {
+    this.aggression = Math.max(this.aggression, 2);
+    if (this.mode === 0) this.timer = Math.min(this.timer, 6);
   }
 
   /** Isolation score: distance to the nearest OTHER living player. Solo players are maximally isolated. */
@@ -97,6 +106,13 @@ export class Entity {
         }
       }
       if (this.timer <= 0) {
+        const alive = [...room.players.values()].filter((p) => p.alive && p.hasState);
+        // a lone player gets one extended reprieve — solo runs need room to breathe
+        if (alive.length === 1 && !this.soloGraceGiven && this.aggression === 0) {
+          this.soloGraceGiven = true;
+          this.timer = 40;
+          return;
+        }
         const target = this.pickTarget(room);
         if (!target) { this.timer = 10; return; }
         this.targetId = target.id;
@@ -128,7 +144,27 @@ export class Entity {
       if (!p && dist > 3) { this.despawn(); return; } // sealed off — melt back into the walls
     }
 
-    const speed = this.mode === 2 ? 4.7 + this.aggression * 0.35 : 2.3 + this.aggression * 0.2;
+    // flashlights held on it slow it down; sustained light during a hunt repels it
+    let shined = false;
+    for (const q of room.players.values()) {
+      if (!q.shining || !q.alive || !q.hasState) continue;
+      const qd = Math.hypot(q.state[0] - this.x, q.state[2] - this.z);
+      if (qd < 16 && !losBlocked(room.seed, q.state[0], q.state[2], this.x, this.z)) { shined = true; break; }
+    }
+    if (shined && this.mode === 2) {
+      this.shineAccum += dt;
+      if (this.shineAccum > 2.5) {
+        room.broadcast({ t: 'retreat', x: this.x, z: this.z });
+        this.shineAccum = 0;
+        this.despawn(20 + Math.random() * 15);
+        return;
+      }
+    } else {
+      this.shineAccum = Math.max(0, this.shineAccum - dt * 0.5);
+    }
+
+    let speed = this.mode === 2 ? 4.7 + this.aggression * 0.35 : 2.3 + this.aggression * 0.2;
+    if (shined) speed *= 0.5;
     let wp = this.path[0];
     while (wp) {
       const wx = wp.x * CELL + CELL / 2, wz = wp.z * CELL + CELL / 2;

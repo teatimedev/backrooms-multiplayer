@@ -36,7 +36,8 @@ export class MentalMap {
     }
   }
 
-  draw(seed: number, px: number, pz: number, yaw: number, avatars: Map<string, Avatar>, now: number): void {
+  draw(seed: number, px: number, pz: number, yaw: number, avatars: Map<string, Avatar>, now: number,
+    breakers: { x: number; z: number; collected: boolean }[] = []): void {
     this.canvas.style.display = this.visible ? 'block' : 'none';
     if (!this.visible) return;
     const w = Math.min(innerWidth, innerHeight) * 0.72;
@@ -77,6 +78,18 @@ export class MentalMap {
       const [sx, sz] = toScreen(ax, az);
       ctx.fillStyle = '#' + AVATAR_COLORS[av.info.color % AVATAR_COLORS.length].toString(16).padStart(6, '0');
       ctx.beginPath(); ctx.arc(sx, sz, 4, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // breaker panels you've been near
+    for (const b of breakers) {
+      const bcx = Math.floor(b.x / CELL), bcz = Math.floor(b.z / CELL);
+      if (!this.visited.has(`${bcx},${bcz}`)) continue;
+      if (Math.abs(bcx - ccx) > half || Math.abs(bcz - ccz) > half) continue;
+      const [sx, sz] = toScreen(bcx, bcz);
+      ctx.strokeStyle = b.collected ? '#4dff88' : '#ffb347';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx - 4, sz - 4, 8, 8);
+      if (b.collected) { ctx.beginPath(); ctx.moveTo(sx - 3, sz); ctx.lineTo(sx - 1, sz + 3); ctx.lineTo(sx + 3, sz - 3); ctx.stroke(); }
     }
 
     // exit, if ever seen

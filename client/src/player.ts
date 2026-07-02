@@ -4,8 +4,8 @@ import { PLAYER_R, resolveCollision } from '@shared/worldgen';
 import type { Anim } from '@shared/protocol';
 
 const EYE = 1.62;
-const WALK = 3.3, RUN = 6.1, ECHO_FLY = 8.5;
-const ACCEL = 22, FRICTION = 11;
+const WALK = 3.7, RUN = 6.6, ECHO_FLY = 8.5;
+const ACCEL = 24, FRICTION = 11;
 
 export class Player {
   pos = new THREE.Vector3(0, EYE, 0);
@@ -17,6 +17,7 @@ export class Player {
   frozen = true; // no movement until pointer locked & spawned
   anim: Anim = 0;
   flashlightOn = true;
+  shake = 0;
 
   flashlight: THREE.SpotLight;
   private keys = new Set<string>();
@@ -26,12 +27,7 @@ export class Player {
   fovKick = 0;
 
   constructor(public camera: THREE.PerspectiveCamera, private seed: number, scene: THREE.Scene) {
-    this.flashlight = new THREE.SpotLight(0xfff6e0, 28, 30, 0.42, 0.45, 1.6);
-    this.flashlight.castShadow = true;
-    this.flashlight.shadow.mapSize.set(1024, 1024);
-    this.flashlight.shadow.camera.near = 0.3;
-    this.flashlight.shadow.camera.far = 25;
-    this.flashlight.shadow.bias = -0.003;
+    this.flashlight = new THREE.SpotLight(0xfff6e0, 42, 32, 0.42, 0.45, 1.5);
     scene.add(this.flashlight, this.flashlight.target);
 
     addEventListener('keydown', (e) => {
@@ -69,7 +65,7 @@ export class Player {
     const moving = fx !== 0 || fz !== 0;
     const wantRun = k.has('ShiftLeft') || k.has('ShiftRight');
     this.sprinting = this.alive && moving && wantRun && this.stamina > 0.02;
-    this.stamina = Math.max(0, Math.min(1, this.stamina + (this.sprinting ? -dt / 5.5 : dt / 7)));
+    this.stamina = Math.max(0, Math.min(1, this.stamina + (this.sprinting ? -dt / 6.5 : dt / 5.5)));
 
     const speed = !this.alive ? ECHO_FLY : this.sprinting ? RUN : WALK;
     // world-space wish direction from yaw (forward is -Z rotated by yaw)
@@ -115,6 +111,12 @@ export class Player {
     cam.rotateY(this.yaw);
     cam.rotateX(this.pitch);
     cam.rotateZ(Math.sin(this.bobT * 0.5) * bobAmp * 0.4);
+    // proximity terror: the world judders
+    this.shake = Math.max(0, this.shake - dt * 0.12);
+    if (this.shake > 0.0005) {
+      cam.rotateX((Math.random() - 0.5) * this.shake);
+      cam.rotateZ((Math.random() - 0.5) * this.shake);
+    }
 
     // sprint FOV kick
     this.fovKick += ((this.sprinting ? 1 : 0) - this.fovKick) * Math.min(1, dt * 5);

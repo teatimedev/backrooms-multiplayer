@@ -6,7 +6,7 @@ import { CHALK_SYMBOLS } from './textures';
 export interface JoinIntent { mode: 'host' | 'join'; code: string; name: string; color: number; voice: boolean }
 
 const CONTROLS_HTML = `
-  <kbd>WASD</kbd> move &nbsp; <kbd>SHIFT</kbd> sprint &nbsp; <kbd>F</kbd> flashlight &nbsp;
+  <kbd>WASD</kbd> move &nbsp; <kbd>SHIFT</kbd> sprint &nbsp; <kbd>F</kbd> flashlight &nbsp; <kbd>E</kbd> interact &nbsp;
   <kbd>C</kbd> (hold) chalk &nbsp; <kbd>TAB</kbd> (hold) map &nbsp; <kbd>V</kbd> (hold) talk &nbsp;
   <kbd>ENTER</kbd> chat &nbsp; <kbd>ESC</kbd> menu`;
 
@@ -62,7 +62,8 @@ export class UI {
           <input id="t-code" type="text" maxlength="12" placeholder="CODE-0000" style="text-transform:uppercase" />
           <button id="t-join">JOIN</button>
         </div>
-        <div class="hint">host gets a code · friends join with it · 2–8 wanderers<br/>${CONTROLS_HTML}</div>
+        <div class="hint">host gets a code · friends join with it · 2–8 wanderers<br/>
+        pull 3 breakers to power the exit · leave together · the light slows it<br/>${CONTROLS_HTML}</div>
       </div>`;
     this.uiEl.appendChild(el);
 
@@ -114,6 +115,7 @@ export class UI {
     hud.innerHTML = `
       <div id="crosshair"></div>
       <div id="objective"></div>
+      <div id="hint"></div>
       <div id="stamina"><div class="fill"></div></div>
       <div id="ptt">V — talk</div>
       <div id="toast"></div>
@@ -164,6 +166,11 @@ export class UI {
   setObjective(text: string): void {
     const el = this.hud?.querySelector('#objective');
     if (el) el.textContent = text;
+  }
+
+  setHint(text: string): void {
+    const el = this.hud?.querySelector('#hint');
+    if (el && el.textContent !== text) el.textContent = text;
   }
 
   toast(text: string, ms = 3200): void {

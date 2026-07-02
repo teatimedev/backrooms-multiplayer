@@ -15,20 +15,62 @@ export const WALL_HALF_T = 0.14;
 export const PLAYER_R = 0.35;
 
 export type Archetype = 'plain' | 'rooms' | 'pillars' | 'cubicles' | 'pool' | 'landmark';
-export type LandmarkKind = 'chair' | 'cabinets' | 'writing' | 'shrine' | 'exit';
+export type LandmarkKind = 'chair' | 'cabinets' | 'writing' | 'shrine' | 'vending' | 'door' | 'breaker' | 'exit';
+
+/** Breaker panels that must all be pulled before the exit has power. */
+export const BREAKERS_NEEDED = 3;
 
 export const mod = (n: number, m: number): number => ((n % m) + m) % m;
 export const isHall = (x: number, z: number): boolean => mod(x, BLOCK) === 0 || mod(z, BLOCK) === 0;
 
-// ---------------------------------------------------------------- exit
+// ---------------------------------------------------------------- layout
+// The macro layout (exit + breakers) is computed once per seed and memoised —
+// blockArchetype is called in every inner worldgen loop.
+
+export interface Layout {
+  exit: { bx: number; bz: number };
+  breakers: { bx: number; bz: number; id: string }[];
+}
+
+const layoutCache = new Map<number, Layout>();
+
+export function layout(seed: number): Layout {
+  let l = layoutCache.get(seed);
+  if (l) return l;
+  const a = r2(seed, 11, 17, 99) * Math.PI * 2;
+  const d = 5 + Math.floor(r2(seed, 23, 5, 98) * 3); // 5..7 blocks out (~170-230m)
+  let ebx = Math.round(Math.cos(a) * d);
+  let ebz = Math.round(Math.sin(a) * d);
+  if (ebx === 0 && ebz === 0) ebx = d;
+
+  // three breakers fanned in distinct directions, closer than the exit
+  const breakers: Layout['breakers'] = [];
+  const base = r2(seed, 3, 9, 97) * Math.PI * 2;
+  for (let i = 0; i < BREAKERS_NEEDED; i++) {
+    const ba = base + (i * Math.PI * 2) / BREAKERS_NEEDED + (r2(seed, i, 4, 96) - 0.5) * 0.8;
+    const bd = 3 + Math.floor(r2(seed, i, 5, 95) * 3); // 3..5 blocks (~100-160m)
+    let bx = Math.round(Math.cos(ba) * bd);
+    let bz = Math.round(Math.sin(ba) * bd);
+    if ((bx === ebx && bz === ebz) || (bx === 0 && bz === 0)) bx += 1;
+    while (breakers.some((o) => o.bx === bx && o.bz === bz)) bx += 1;
+    breakers.push({ bx, bz, id: `${bx}:${bz}` });
+  }
+  l = { exit: { bx: ebx, bz: ebz }, breakers };
+  layoutCache.set(seed, l);
+  return l;
+}
 
 export function exitBlock(seed: number): { bx: number; bz: number } {
-  const a = r2(seed, 11, 17, 99) * Math.PI * 2;
-  const d = 6 + Math.floor(r2(seed, 23, 5, 98) * 4); // 6..9 blocks out (~200-300m)
-  let bx = Math.round(Math.cos(a) * d);
-  let bz = Math.round(Math.sin(a) * d);
-  if (bx === 0 && bz === 0) bx = d;
-  return { bx, bz };
+  return layout(seed).exit;
+}
+
+/** World-space centre of each breaker panel. */
+export function breakerSpots(seed: number): { id: string; x: number; z: number }[] {
+  return layout(seed).breakers.map((b) => ({
+    id: b.id,
+    x: (b.bx * BLOCK + 4) * CELL + CELL / 2,
+    z: (b.bz * BLOCK + 4) * CELL + CELL / 2,
+  }));
 }
 
 /** World-space centre of the exit doorway. */
@@ -40,8 +82,9 @@ export function exitPos(seed: number): { x: number; z: number } {
 // ---------------------------------------------------------------- blocks
 
 export function blockArchetype(seed: number, bx: number, bz: number): Archetype {
-  const e = exitBlock(seed);
-  if (bx === e.bx && bz === e.bz) return 'landmark';
+  const l = layout(seed);
+  if (bx === l.exit.bx && bz === l.exit.bz) return 'landmark';
+  if (l.breakers.some((b) => b.bx === bx && b.bz === bz)) return 'landmark';
   const r = r2(seed, bx, bz, 7);
   if (r < 0.30) return 'plain';
   if (r < 0.60) return 'rooms';
@@ -52,9 +95,10 @@ export function blockArchetype(seed: number, bx: number, bz: number): Archetype 
 }
 
 export function landmarkKind(seed: number, bx: number, bz: number): LandmarkKind {
-  const e = exitBlock(seed);
-  if (bx === e.bx && bz === e.bz) return 'exit';
-  const kinds: LandmarkKind[] = ['chair', 'cabinets', 'writing', 'shrine'];
+  const l = layout(seed);
+  if (bx === l.exit.bx && bz === l.exit.bz) return 'exit';
+  if (l.breakers.some((b) => b.bx === bx && b.bz === bz)) return 'breaker';
+  const kinds: LandmarkKind[] = ['chair', 'cabinets', 'writing', 'shrine', 'vending', 'door'];
   return kinds[hash2(seed, bx, bz, 31) % kinds.length];
 }
 
@@ -116,7 +160,7 @@ export function fixtureDead(seed: number, x: number, z: number): boolean {
 export function almondAt(seed: number, bx: number, bz: number): { id: string; x: number; z: number } | null {
   const a = blockArchetype(seed, bx, bz);
   const isShrine = a === 'landmark' && landmarkKind(seed, bx, bz) === 'shrine';
-  if (!isShrine && r2(seed, bx, bz, 21) > 0.20) return null;
+  if (!isShrine && r2(seed, bx, bz, 21) > 0.28) return null;
   const ox = 1 + (hash2(seed, bx, bz, 22) % 6);
   const oz = 1 + (hash2(seed, bx, bz, 23) % 6);
   const cx = isShrine ? bx * BLOCK + 4 : bx * BLOCK + ox;

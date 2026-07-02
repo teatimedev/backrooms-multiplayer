@@ -75,7 +75,7 @@ export class Avatar {
     this.group.add(torso, hips, this.head, this.legL, this.legR, this.armL, this.armR, this.tag);
     this.group.traverse((o) => { (o as THREE.Mesh).castShadow = true; });
 
-    this.headlamp = new THREE.SpotLight(0xfff3c9, 14, 26, 0.38, 0.5, 1.7);
+    this.headlamp = new THREE.SpotLight(0xfff3c9, 24, 28, 0.38, 0.5, 1.6);
     this.headlamp.position.y = 1.62;
     this.group.add(this.headlamp, this.headlamp.target);
     this.headlamp.target.position.set(0, 1.3, -8);
@@ -111,9 +111,7 @@ export class Avatar {
     const pitch = lerpA(a.s[4], b.s[4]);
     const anim = b.s[5];
 
-    this.group.position.set(x, anim === 3 ? y - 1.3 : 0 + 0, z);
-    if (anim === 3) this.group.position.y = y - 1.3;
-    else this.group.position.y = 0;
+    this.group.position.set(x, anim === 3 ? y - 1.3 : 0, z);
     this.group.rotation.y = yaw;
     this.head.rotation.x = -pitch * 0.8;
 

@@ -108,6 +108,11 @@ label.chk { display: flex; gap: 8px; align-items: center; color: var(--dim); fon
   position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
   color: rgba(214, 202, 160, 0.55); font-size: 11px; letter-spacing: 0.3em;
 }
+#hint {
+  position: absolute; top: 58%; left: 50%; transform: translateX(-50%);
+  color: rgba(255, 179, 71, 0.9); font-size: 14px; letter-spacing: 0.2em;
+  text-shadow: 0 0 10px rgba(0, 0, 0, 0.9);
+}
 #chatlog {
   position: absolute; bottom: 90px; left: 36px; width: 340px;
   display: flex; flex-direction: column; gap: 3px; font-size: 13px;

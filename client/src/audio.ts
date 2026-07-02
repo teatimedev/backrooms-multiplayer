@@ -258,6 +258,56 @@ export class GameAudio {
     this.burst(p, 1.2, 'bandpass', 3000 + Math.random() * 2000, 8, 0.12, 1.0);
   }
 
+  /** Electrical spitting from an unpulled breaker — an audio beacon. */
+  spark(x: number, z: number): void {
+    if (!this.ctx) return;
+    const p = this.panner(x, 1.2, z); p.connect(this.master);
+    for (let i = 0; i < 3; i++) {
+      setTimeout(() => this.burst(p, 0.12, 'highpass', 5200, 1.5, 0.3, 0.05), i * (60 + Math.random() * 90));
+    }
+  }
+
+  breakerClunk(): void {
+    if (!this.ctx) return;
+    this.thump(0.35);
+    this.burst(this.master, 0.3, 'bandpass', 2600, 3, 0.35, 0.18);
+    setTimeout(() => this.burst(this.master, 0.6, 'lowpass', 300, 1, 0.6, 0.4), 130);
+  }
+
+  /** The entity driven off by light: a shriek falling away into the maze. */
+  retreatShriek(x: number, z: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const p = this.panner(x, 1.8, z); p.connect(this.master);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    const t = ctx.currentTime;
+    o.frequency.setValueAtTime(900, t);
+    o.frequency.exponentialRampToValueAtTime(70, t + 1.6);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.4, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 1.7);
+    o.connect(g).connect(p);
+    o.start(); o.stop(t + 1.8);
+    this.burst(p, 1.0, 'highpass', 2000, 1, 0.3, 0.8);
+  }
+
+  /** Continuous cold drone at the powered exit — audible from ~35m. */
+  setExitBeacon(x: number, z: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const p = this.panner(x, 1.6, z);
+    p.maxDistance = 80; p.rolloffFactor = 1.1;
+    p.connect(this.master);
+    for (const [f, a] of [[110, 0.05], [165, 0.03], [220, 0.02]] as const) {
+      const o = ctx.createOscillator();
+      o.type = 'sine'; o.frequency.value = f;
+      const g = ctx.createGain(); g.gain.value = a;
+      o.connect(g).connect(p);
+      o.start();
+    }
+  }
+
   flickerZap(x: number, z: number): void {
     if (!this.ctx) return;
     const p = this.panner(x, 2.8, z); p.connect(this.master);

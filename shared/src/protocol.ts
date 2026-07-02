@@ -30,6 +30,8 @@ export type C2S =
   | { t: 'state'; s: StateTuple }
   | { t: 'chalk'; m: Omit<Mark, 'by'> }
   | { t: 'pickup'; id: string }
+  | { t: 'breaker'; id: string }
+  | { t: 'shine'; on: boolean }
   | { t: 'chat'; text: string }
   | { t: 'rtc'; to: string; data: unknown }
   | { t: 'flick' }
@@ -37,19 +39,22 @@ export type C2S =
   | { t: 'ping'; n: number };
 
 export type S2C =
-  | { t: 'joined'; you: string; code: string; seed: number; round: number; spawn: [number, number]; players: PlayerInfo[]; marks: Mark[]; taken: string[] }
+  | { t: 'joined'; you: string; code: string; seed: number; round: number; spawn: [number, number]; players: PlayerInfo[]; marks: Mark[]; taken: string[]; breakers: string[] }
   | { t: 'err'; msg: string }
   | { t: 'pj'; p: PlayerInfo }
   | { t: 'pl'; id: string; name: string }
   | { t: 's'; p: Record<string, StateTuple>; e: EntityTuple | null }
   | { t: 'chalk'; m: Mark }
   | { t: 'pickup'; id: string; by: string }
+  | { t: 'breaker'; id: string; by: string; left: number }
+  | { t: 'powered' }
+  | { t: 'retreat'; x: number; z: number }
   | { t: 'kill'; id: string }
   | { t: 'chat'; from: string; name: string; text: string }
   | { t: 'flicker'; x: number; z: number; r: number }
   | { t: 'mimic'; x: number; z: number; kind: 'steps' | 'voice' }
   | { t: 'win'; time: number }
-  | { t: 'wipe' }
+  | { t: 'wipe'; time: number }
   | { t: 'round'; seed: number; round: number; spawn: [number, number] }
   | { t: 'rtc'; from: string; data: unknown }
   | { t: 'pong'; n: number };

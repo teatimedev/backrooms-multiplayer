@@ -144,6 +144,25 @@ export function writingTex(lines: string[]): THREE.CanvasTexture {
   return t;
 }
 
+/** Free chalk text on transparent ground (door graffiti etc). */
+export function chalkWriting(text: string): THREE.CanvasTexture {
+  const [c, ctx] = canvas(256);
+  ctx.fillStyle = 'rgba(235,232,225,0.9)';
+  ctx.font = 'bold 44px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  const words = text.split(' ');
+  words.forEach((w, i) => {
+    ctx.save();
+    ctx.translate(128, 100 + i * 52);
+    ctx.rotate((Math.random() - 0.5) * 0.09);
+    ctx.fillText(w, 0, 0);
+    ctx.restore();
+  });
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 export const CHALK_SYMBOLS = ['↑', '→', '↓', '←', '✕', '?', '○', '!'] as const;
 
 /** One chalk decal texture per symbol, white on transparent. */

@@ -39,9 +39,10 @@ const wss = new WebSocketServer({ server: http, path: '/ws' });
 
 interface Session { room: Room | null; player: Player | null; hb: boolean }
 
-wss.on('connection', (ws: WebSocket) => {
+wss.on('connection', (ws: WebSocket & { _hb?: boolean }) => {
   const sess: Session = { room: null, player: null, hb: true };
-  ws.on('pong', () => { sess.hb = true; });
+  ws._hb = true;
+  ws.on('pong', () => { ws._hb = true; });
 
   ws.on('message', (raw) => {
     let msg: Record<string, unknown>;
@@ -86,7 +87,6 @@ setInterval(() => {
     if (ws._hb === false) { ws.terminate(); continue; }
     ws._hb = false;
     ws.ping();
-    ws.once('pong', () => { ws._hb = true; });
   }
 }, 15000);
 

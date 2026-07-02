@@ -1,6 +1,6 @@
 // The conductor: rendering, input, network events, sanity, the loop.
 import * as THREE from 'three';
-import { exitPos } from '@shared/worldgen';
+import { BREAKERS_NEEDED, losBlocked, resolveCollision } from '@shared/worldgen';
 import type { PlayerInfo, S2C, StateTuple } from '@shared/protocol';
 import { World, LightPool } from './world';
 import { Player } from './player';
@@ -40,6 +40,12 @@ export class Game {
   private seed: number;
   private names = new Map<string, string>();
   private exitSense = 0;
+  private shining = false;
+  private shineToastShown = false;
+  private glimpse: EntityView;
+  private glimpseTimer = 30;
+  private glimpseUntil = 0;
+  private sparkTimer = 4;
   private radialHeld = false;
   private radialVec = { x: 0, y: 0 };
   private radialSel = 0;
@@ -56,17 +62,19 @@ export class Game {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // no shadow maps: with 15+ dynamic lights the spot-shadow pass wrecked
+    // both the frame budget and (empirically) the lighting itself. The look
+    // lives in fog, flicker and grain, not shadows.
+    this.renderer.shadowMap.enabled = false;
     this.renderer.domElement.className = 'game';
     ui.root.prepend(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(74, innerWidth / innerHeight, 0.05, 90);
     this.scene.fog = new THREE.FogExp2(0x241d0e, 0.05);
     this.scene.background = new THREE.Color(0x0d0a05);
-    this.scene.add(new THREE.HemisphereLight(0x8a7c4d, 0x2e2410, 0.65));
+    this.scene.add(new THREE.HemisphereLight(0x8a7c4d, 0x2e2410, 0.85));
 
-    this.world = new World(this.scene, this.seed, joined.taken);
+    this.world = new World(this.scene, this.seed, joined.taken, joined.breakers);
     this.lights = new LightPool(this.scene);
     this.player = new Player(this.camera, this.seed, this.scene);
     this.player.spawn(joined.spawn[0], joined.spawn[1]);
@@ -74,6 +82,7 @@ export class Game {
       this.audio.footstep(this.world.surfaceAt(this.player.pos.x, this.player.pos.z), i);
     };
     this.entity = new EntityView(this.scene);
+    this.glimpse = new EntityView(this.scene); // sanity's borrowed silhouette
     this.fx = new FX(this.renderer, this.scene, this.camera);
     this.chalk = new ChalkSystem(this.scene);
     this.chalk.setAll(joined.marks);
@@ -81,7 +90,7 @@ export class Game {
 
     ui.buildHUD();
     this.map = new MentalMap(document.getElementById('hud')!);
-    ui.setObjective('find the others · find the way out · leave together');
+    this.refreshObjective();
     ui.chatLine('', `you are in session ${this.code}`);
 
     for (const p of joined.players) {
@@ -94,6 +103,7 @@ export class Game {
 
     // audio can start now — reaching this point required a click on the title
     this.audio.init();
+    if (this.world.powered) this.audio.setExitBeacon(this.world.exit.x, this.world.exit.z);
     if (voiceWanted) {
       void this.voice.enable(this.myId, [...this.avatars.keys()]).then((ok) => {
         if (!ok) this.ui.toast('microphone unavailable — voice disabled', 4000);
@@ -108,6 +118,15 @@ export class Game {
     this.loop();
     // debug handle (used by automated verification; harmless in prod)
     (window as unknown as Record<string, unknown>).__game = this;
+  }
+
+  private refreshObjective(): void {
+    const left = [...this.world.breakers.values()].filter((b) => !b.collected).length;
+    if (this.world.powered) {
+      this.ui.setObjective('the exit is LIVE — get everyone there, together');
+    } else {
+      this.ui.setObjective(`restore power: ${BREAKERS_NEEDED - left}/${BREAKERS_NEEDED} breakers pulled · stay close or split up?`);
+    }
   }
 
   // ---------------------------------------------------------------- net
@@ -143,16 +162,43 @@ export class Game {
       if (m.by === this.myId) {
         this.audio.pickup();
         this.player.sanity = 100;
-        const ex = this.world.exit;
+        // the water shows you the current: nearest live breaker, or the exit
+        let tx = this.world.exit.x, tz = this.world.exit.z, what = 'the way out';
+        if (!this.world.powered) {
+          let best = Infinity;
+          for (const b of this.world.breakers.values()) {
+            if (b.collected) continue;
+            const d = Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z);
+            if (d < best) { best = d; tx = b.x; tz = b.z; what = 'a breaker'; }
+          }
+        }
         this.map.pulse = {
-          angle: Math.atan2(ex.z - this.player.pos.z, ex.x - this.player.pos.x),
+          angle: Math.atan2(tz - this.player.pos.z, tx - this.player.pos.x),
           until: performance.now() / 1000 + 8,
         };
         this.exitSense = 8;
-        this.ui.toast('almond water — you can feel the way out. hold TAB.');
+        this.ui.toast(`almond water — you can feel ${what}. hold TAB.`);
       } else {
         this.ui.toast(`${this.names.get(m.by) ?? 'someone'} found almond water`);
       }
+    });
+    net.on('breaker', (m) => {
+      this.world.collectBreaker(m.id);
+      this.audio.breakerClunk();
+      this.refreshObjective();
+      const who = m.by === this.myId ? 'you' : this.names.get(m.by) ?? 'someone';
+      if (m.left > 0) this.ui.toast(`${who} pulled a breaker — ${m.left} left`, 4000);
+    });
+    net.on('powered', () => {
+      this.world.setPowered();
+      this.audio.setExitBeacon(this.world.exit.x, this.world.exit.z);
+      this.refreshObjective();
+      this.player.shake = Math.max(this.player.shake, 0.03);
+      this.ui.toast('THE EXIT HAS POWER. it knows. RUN.', 6000);
+    });
+    net.on('retreat', (m) => {
+      this.audio.retreatShriek(m.x, m.z);
+      this.ui.toast('it recoils from the light', 3500);
     });
     net.on('kill', (m) => {
       if (m.id === this.myId) this.die();
@@ -183,11 +229,12 @@ export class Game {
         `everyone stepped through together.<br/>${mins}m ${secs}s in the yellow.`,
         () => this.net.send({ t: 'restart' }), () => location.reload()), 900);
     });
-    net.on('wipe', () => {
+    net.on('wipe', (m) => {
       this.ended = true;
       document.exitPointerLock();
+      const mins = Math.floor(m.time / 60), secs = m.time % 60;
       setTimeout(() => this.ui.showEnd('wipe',
-        'the backrooms kept every one of you.<br/>only echoes remain, flickering in empty halls.',
+        `the backrooms kept every one of you.<br/>you lasted ${mins}m ${secs}s. only echoes remain.`,
         () => this.net.send({ t: 'restart' }), () => location.reload()), 1200);
     });
     net.on('round', (m) => this.newRound(m.seed, m.spawn));
@@ -204,14 +251,21 @@ export class Game {
     for (const key of [...this.world.chunks.keys()]) {
       this.scene.remove(this.world.chunks.get(key)!.group);
     }
-    this.world = new World(this.scene, seed, []);
+    this.world = new World(this.scene, seed, [], []);
     this.player.setSeed(seed);
     this.player.spawn(spawn[0], spawn[1]);
     this.chalk.setAll([]);
     this.map.reset();
     this.entity.sync(null);
+    this.glimpse.sync(null);
+    this.glimpseTimer = 30;
+    this.shining = false;
+    this.shineToastShown = false;
+    this.exitSense = 0;
+    this.stepTimers.clear();
     for (const av of this.avatars.values()) av.alive = true;
     this.fx.fade = 0;
+    this.refreshObjective();
     this.ui.toast('a different maze. the same hum.', 4000);
     this.requestLock();
   }
@@ -296,6 +350,16 @@ export class Game {
             this.ui.showRadial(this.radialSel);
           }
           break;
+        case 'KeyE': {
+          if (!this.player.alive) break;
+          for (const b of this.world.breakers.values()) {
+            if (!b.collected && Math.hypot(b.x - this.player.pos.x, b.z - this.player.pos.z) < 2.6) {
+              this.net.send({ t: 'breaker', id: b.id });
+              break;
+            }
+          }
+          break;
+        }
         case 'KeyV':
           if (this.player.alive && this.voice.enabled && !this.voice.talking) {
             this.voice.setTalking(true);
@@ -393,7 +457,7 @@ export class Game {
       if (av.alive && (anim === 1 || anim === 2)) {
         const d = Math.hypot(av.lastState[0] - p.pos.x, av.lastState[2] - p.pos.z);
         if (d < 22) {
-          let t = this.stepTimers.get(id)! - dt;
+          let t = (this.stepTimers.get(id) ?? 0) - dt;
           if (t <= 0) {
             this.audio.posFootstep(av.lastState[0], av.lastState[2], anim === 2 ? 0.8 : 0.45);
             t = anim === 2 ? 0.29 : 0.48;
@@ -404,16 +468,94 @@ export class Game {
     }
 
     // entity + danger
-    const danger = this.entity.update(dt, time, p.pos);
+    let danger = this.entity.update(dt, time, p.pos);
+    const glimpseDanger = this.glimpse.update(dt, time, p.pos) * 0.45;
+    danger = Math.max(danger, glimpseDanger);
     this.audio.danger = p.alive ? danger : 0;
     this.fx.danger = p.alive ? danger : 0;
+    if (p.alive && danger > 0.55) p.shake = Math.max(p.shake, (danger - 0.55) * 0.05);
     if (this.entity.active && this.entity.mode === 2) {
       const t = this.stepTimers.get('__entity') ?? 0;
       const nt = t - dt;
       if (nt <= 0) {
         this.audio.posFootstep(this.entity.pos.x, this.entity.pos.y, 1, true);
+        const d = Math.hypot(this.entity.pos.x - p.pos.x, this.entity.pos.y - p.pos.z);
+        if (d < 13) p.shake = Math.max(p.shake, 0.02 * (1 - d / 13));
         this.stepTimers.set('__entity', 0.34);
       } else this.stepTimers.set('__entity', nt);
+    }
+
+    // flashlight-on-it detection → tell the server (it hates the light)
+    if (p.alive) {
+      let shine = false;
+      if (p.flashlightOn && this.entity.active) {
+        const dx = this.entity.pos.x - p.pos.x, dz = this.entity.pos.y - p.pos.z;
+        const d = Math.hypot(dx, dz);
+        if (d < 15 && d > 0.5) {
+          const fwd = new THREE.Vector3();
+          this.camera.getWorldDirection(fwd);
+          const dot = (fwd.x * dx + fwd.z * dz) / d;
+          if (dot > 0.975 && !losBlocked(this.seed, p.pos.x, p.pos.z, this.entity.pos.x, this.entity.pos.y)) shine = true;
+        }
+      }
+      if (shine !== this.shining) {
+        this.shining = shine;
+        this.net.send({ t: 'shine', on: shine });
+        if (shine && !this.shineToastShown) {
+          this.shineToastShown = true;
+          this.ui.toast('it slows in your beam — hold the light on it');
+        }
+      }
+    }
+
+    // glimpses: between real hunts, something watches from down the hall
+    if (p.alive && !this.entity.active && p.sanity < 78) {
+      if (this.glimpse.active) {
+        const gd = Math.hypot(this.glimpse.pos.x - p.pos.x, this.glimpse.pos.y - p.pos.z);
+        if (now > this.glimpseUntil || gd < 7.5) {
+          this.glimpse.sync(null);
+          this.audio.whisper(this.glimpse.pos.x, this.glimpse.pos.y);
+        }
+      } else {
+        this.glimpseTimer -= dt * (1 + (78 - p.sanity) / 50);
+        if (this.glimpseTimer <= 0) {
+          this.glimpseTimer = 40 + Math.random() * 55;
+          const fwd = new THREE.Vector3();
+          this.camera.getWorldDirection(fwd);
+          const gd = 11 + Math.random() * 7;
+          let gx = p.pos.x + fwd.x * gd + (Math.random() - 0.5) * 5;
+          let gz = p.pos.z + fwd.z * gd + (Math.random() - 0.5) * 5;
+          ({ x: gx, z: gz } = resolveCollision(this.seed, gx, gz, 0.4));
+          if (!losBlocked(this.seed, p.pos.x, p.pos.z, gx, gz)) {
+            this.glimpse.sync([gx, gz, 1, null]);
+            this.glimpseUntil = now + 1.1 + Math.random() * 0.6;
+          }
+        }
+      }
+    } else if (this.glimpse.active && this.entity.active) {
+      this.glimpse.sync(null); // the real thing displaces the imagined one
+    }
+
+    // uncollected breakers spit sparks — follow the sound
+    this.sparkTimer -= dt;
+    if (this.sparkTimer <= 0) {
+      this.sparkTimer = 3.5 + Math.random() * 3;
+      let nb: { x: number; z: number } | null = null, nd = 24;
+      for (const b of this.world.breakers.values()) {
+        if (b.collected) continue;
+        const d = Math.hypot(b.x - p.pos.x, b.z - p.pos.z);
+        if (d < nd) { nd = d; nb = b; }
+      }
+      if (nb) this.audio.spark(nb.x, nb.z);
+    }
+
+    // "E — pull the breaker" hint
+    if (p.alive) {
+      let nearBreaker = false;
+      for (const b of this.world.breakers.values()) {
+        if (!b.collected && Math.hypot(b.x - p.pos.x, b.z - p.pos.z) < 2.6) { nearBreaker = true; break; }
+      }
+      this.ui.setHint(nearBreaker ? 'E — pull the breaker' : '');
     }
 
     // sanity: isolation gnaws, company heals
@@ -450,7 +592,9 @@ export class Game {
     const exDist = Math.hypot(ex.x - p.pos.x, ex.z - p.pos.z);
     if (exDist < 30 && !this.map.exitSeen) {
       this.map.exitSeen = { x: ex.x, z: ex.z };
-      this.ui.toast('a doorway that should not be here. bring everyone.', 5000);
+      this.ui.toast(this.world.powered
+        ? 'the doorway is live. bring everyone.'
+        : 'a dead doorway. it wants power — find the breakers.', 5000);
     }
     if (this.exitSense > 0) this.exitSense -= dt;
 
@@ -464,7 +608,7 @@ export class Game {
 
     // hud
     this.ui.setStamina(p.stamina);
-    this.map.draw(this.seed, p.pos.x, p.pos.z, p.yaw, this.avatars, now);
+    this.map.draw(this.seed, p.pos.x, p.pos.z, p.yaw, this.avatars, now, [...this.world.breakers.values()]);
 
     this.fx.render(dt, time);
   };

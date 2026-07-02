@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import {
   BLOCK, CELL, WALL_H, LOW_WALL_H, WALL_HALF_T,
   blockArchetype, blockDark, landmarkKind, wallN, wallW, pillarAt,
-  fixtureAt, fixtureDead, almondAt, exitBlock, exitPos, mod,
+  fixtureAt, fixtureDead, almondAt, exitPos, breakerSpots,
 } from '@shared/worldgen';
 import { hash2, rand01, mulberry32 } from '@shared/rng';
 import * as tx from './textures';
@@ -23,6 +23,16 @@ interface Chunk {
   almond: { id: string; mesh: THREE.Group } | null;
 }
 
+export interface Breaker {
+  id: string;
+  x: number;
+  z: number;
+  collected: boolean;
+  lever: THREE.Mesh | null;   // null until its chunk is built
+  strip: THREE.Mesh | null;
+  light: THREE.PointLight | null;
+}
+
 export class World {
   scene: THREE.Scene;
   seed: number;
@@ -32,6 +42,9 @@ export class World {
   taken = new Set<string>();
   exit: { x: number; z: number };
   exitLight: THREE.PointLight | null = null;
+  exitVoid: THREE.Mesh | null = null;
+  breakers = new Map<string, Breaker>();
+  powered = false;
 
   private mats: Record<string, THREE.Material>;
   private wallGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -40,11 +53,16 @@ export class World {
   private tmpM = new THREE.Matrix4();
   private tmpC = new THREE.Color();
 
-  constructor(scene: THREE.Scene, seed: number, taken: string[]) {
+  constructor(scene: THREE.Scene, seed: number, taken: string[], collectedBreakers: string[] = []) {
     this.scene = scene;
     this.seed = seed;
     this.taken = new Set(taken);
     this.exit = exitPos(seed);
+    const collected = new Set(collectedBreakers);
+    for (const b of breakerSpots(seed)) {
+      this.breakers.set(b.id, { id: b.id, x: b.x, z: b.z, collected: collected.has(b.id), lever: null, strip: null, light: null });
+    }
+    this.powered = collected.size >= 3;
     this.mats = {
       wall: new THREE.MeshStandardMaterial({ map: tx.wallpaperTex(), roughness: 0.92 }),
       carpet: new THREE.MeshStandardMaterial({ map: tx.carpetTex(), roughness: 1 }),
@@ -104,7 +122,30 @@ export class World {
         chunk.fixtureMesh.instanceColor!.needsUpdate = true;
       }
     }
-    if (this.exitLight) this.exitLight.intensity = 2.2 + Math.sin(time * 1.7) * 0.6;
+    if (this.exitLight) {
+      this.exitLight.intensity = this.powered ? 2.6 + Math.sin(time * 1.7) * 0.7 : 0;
+    }
+    for (const b of this.breakers.values()) {
+      if (!b.light) continue;
+      // uncollected: nervous amber sparking · collected: steady green
+      b.light.intensity = b.collected ? 2.0 : (Math.random() < 0.08 ? 4.5 : 1.3 + Math.random() * 0.8);
+    }
+  }
+
+  collectBreaker(id: string): void {
+    const b = this.breakers.get(id);
+    if (!b) return;
+    b.collected = true;
+    if (b.lever) b.lever.rotation.x = 0.9;
+    if (b.strip) (b.strip.material as THREE.MeshBasicMaterial).color.setHex(0x4dff88);
+    if (b.light) b.light.color.setHex(0x4dff88);
+  }
+
+  setPowered(): void {
+    this.powered = true;
+    if (this.exitVoid) {
+      (this.exitVoid.material as THREE.MeshBasicMaterial).color.setHex(0x0e1c22);
+    }
   }
 
   /** 0..1 brightness of a fixture right now — buzzy, occasionally dropping out. */
@@ -267,7 +308,8 @@ export class World {
     const rnd = mulberry32(hash2(this.seed, bx, bz, 40));
 
     if (kind === 'exit') {
-      // the way out: a doorway of wrong-black with a cold light above
+      // the way out: a doorway of wrong-black with a cold light above.
+      // dead until every breaker is pulled.
       const jambMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0f, roughness: 0.2 });
       for (const s of [-1, 1]) {
         const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.6, 0.3), jambMat);
@@ -278,12 +320,79 @@ export class World {
       lintel.position.set(cx, 2.6, cz);
       group.add(lintel);
       const void_ = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 2.5),
-        new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide }));
+        new THREE.MeshBasicMaterial({ color: this.powered ? 0x0e1c22 : 0x000000, side: THREE.DoubleSide }));
       void_.position.set(cx, 1.25, cz);
       group.add(void_);
-      this.exitLight = new THREE.PointLight(0xbfe8ff, 2.2, 18, 1.6);
+      this.exitVoid = void_;
+      this.exitLight = new THREE.PointLight(0xbfe8ff, this.powered ? 2.6 : 0, 18, 1.6);
       this.exitLight.position.set(cx, 2.9, cz);
       group.add(this.exitLight);
+      return;
+    }
+    if (kind === 'breaker') {
+      const id = `${bx}:${bz}`;
+      const reg = this.breakers.get(id);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.7, 0.45),
+        new THREE.MeshStandardMaterial({ color: 0x37413a, roughness: 0.5, metalness: 0.6 }));
+      box.position.set(cx, 0.85, cz);
+      box.castShadow = true;
+      group.add(box);
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.3, 0.05),
+        new THREE.MeshBasicMaterial({ color: reg?.collected ? 0x4dff88 : 0xffb347 }));
+      strip.position.set(cx - 0.3, 0.9, cz + 0.24);
+      group.add(strip);
+      const leverGeo = new THREE.BoxGeometry(0.12, 0.5, 0.12);
+      leverGeo.translate(0, 0.25, 0);
+      const lever = new THREE.Mesh(leverGeo,
+        new THREE.MeshStandardMaterial({ color: 0xb03a2e, roughness: 0.4 }));
+      lever.position.set(cx + 0.2, 1.0, cz + 0.22);
+      lever.rotation.x = reg?.collected ? 0.9 : -0.6;
+      group.add(lever);
+      const light = new THREE.PointLight(reg?.collected ? 0x4dff88 : 0xffb347, 0.8, 10, 1.8);
+      light.position.set(cx, 2.0, cz + 0.5);
+      group.add(light);
+      if (reg) { reg.lever = lever; reg.strip = strip; reg.light = light; }
+      return;
+    }
+    if (kind === 'vending') {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.9, 0.75),
+        new THREE.MeshStandardMaterial({ color: 0x27313d, roughness: 0.4, metalness: 0.3 }));
+      body.position.set(cx, 0.95, cz);
+      body.rotation.y = Math.floor(rnd() * 4) * (Math.PI / 2);
+      body.castShadow = true;
+      group.add(body);
+      const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 1.3),
+        new THREE.MeshBasicMaterial({ color: 0x9fd8e8 }));
+      panel.position.set(cx, 1.05, cz).add(new THREE.Vector3(Math.sin(body.rotation.y) * 0.39, 0, Math.cos(body.rotation.y) * 0.39));
+      panel.rotation.y = body.rotation.y;
+      group.add(panel);
+      const glow = new THREE.PointLight(0x9fd8e8, 2.4, 10, 1.6);
+      glow.position.set(cx, 1.4, cz);
+      group.add(glow);
+      return;
+    }
+    if (kind === 'door') {
+      // a red door. it does not open. it should not be here either.
+      const frameMat = new THREE.MeshStandardMaterial({ color: 0x241d14, roughness: 0.8 });
+      for (const s of [-1, 1]) {
+        const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.2, 0.25), frameMat);
+        jamb.position.set(cx + s * 0.55, 1.1, cz);
+        group.add(jamb);
+      }
+      const top = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.18, 0.25), frameMat);
+      top.position.set(cx, 2.2, cz);
+      group.add(top);
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(0.95, 2.1, 0.09),
+        new THREE.MeshStandardMaterial({ color: 0x7e1f16, roughness: 0.55 }));
+      slab.position.set(cx, 1.05, cz);
+      slab.castShadow = true;
+      group.add(slab);
+      // scrawled straight onto the door
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 0.85),
+        new THREE.MeshBasicMaterial({ map: tx.chalkWriting('NOT AN EXIT'), transparent: true, depthWrite: false }));
+      sign.position.set(cx, 1.35, cz + 0.06);
+      group.add(sign);
+      this.wallsRaycast.push(slab);
       return;
     }
     if (kind === 'chair') {
@@ -353,7 +462,7 @@ export class LightPool {
   lights: THREE.PointLight[] = [];
   constructor(scene: THREE.Scene, count = 10) {
     for (let i = 0; i < count; i++) {
-      const l = new THREE.PointLight(0xfff0bd, 0, 16, 1.4);
+      const l = new THREE.PointLight(0xfff0bd, 0, 19, 1.3);
       l.position.y = WALL_H - 0.3;
       scene.add(l);
       this.lights.push(l);
@@ -372,7 +481,7 @@ export class LightPool {
       if (!e) { l.intensity = 0; continue; }
       const lvl = world.lightLevel(e.f, time);
       l.position.set(e.f.x, WALL_H - 0.3, e.f.z);
-      l.intensity = 5.5 * lvl;
+      l.intensity = 9.5 * lvl;
       hum += Math.max(0, 1 - e.d / 20) * lvl;
     }
     return Math.min(1, hum / 4);
