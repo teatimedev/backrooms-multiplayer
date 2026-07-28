@@ -1,0 +1,32 @@
+name: Exact lambda curve sweep
+
+on:
+  pull_request:
+    paths:
+      - 'research/lambda_curve_search.sage'
+      - '.github/workflows/diophantine-lambda.yml'
+  workflow_dispatch:
+
+jobs:
+  lambda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        code: ['2', '3', '5_3', '34_15', '25_41', '58_101', '87_101', '9129_3943', '4250453_7007642']
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker pull sagemath/sagemath:latest
+      - name: Run ${{ matrix.code }}
+        run: |
+          set -o pipefail
+          docker run --rm -v "$PWD:/work" -w /work sagemath/sagemath:latest \
+            sage research/lambda_curve_search.sage "${{ matrix.code }}" \
+            | tee "research/result-${{ matrix.code }}.jsonl"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-${{ matrix.code }}
+          path: research/result-${{ matrix.code }}.jsonl
+          if-no-files-found: warn
