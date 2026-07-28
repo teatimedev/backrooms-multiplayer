@@ -4,9 +4,9 @@ import itertools, json, sys, time
 proof.all(True)
 code=sys.argv[1] if len(sys.argv)>1 else '2'
 values={
- '2':QQ(2),'3':QQ(3),'5_3':QQ(5,3),'34_15':QQ(34,15),
- '25_41':QQ(25,41),'58_101':QQ(58,101),'87_101':QQ(87,101),
- '9129_3943':QQ(9129,3943),'4250453_7007642':QQ(4250453,7007642)
+ '2':QQ(2),'3':QQ(3),'5_3':QQ(5)/3,'34_15':QQ(34)/15,
+ '25_41':QQ(25)/41,'58_101':QQ(58)/101,'87_101':QQ(87)/101,
+ '9129_3943':QQ(9129)/3943,'4250453_7007642':QQ(4250453)/7007642
 }
 lam=values[code]
 def emit(kind,**kw): print(json.dumps({'kind':kind,**kw},sort_keys=True),flush=True)
@@ -23,12 +23,12 @@ def to_surface(P):
  x,y,z=ZZ(x),ZZ(y),ZZ(z); assert verify(x,y,z); return x,y,z,T
 t=time.time()
 try:
- rank=E.rank(proof=True); gens=E.gens(proof=True); tors=E.torsion_points()
+ rank=E.rank(); gens=E.gens(); tors=E.torsion_points()
  emit('curve_data',code=code,rank=int(rank),gens=[str(P) for P in gens],torsion=[str(P) for P in tors],seconds=time.time()-t)
 except Exception as ex:
  emit('curve_error',code=code,error=repr(ex),seconds=time.time()-t)
  try:
-  rank=E.rank(proof=False); gens=E.gens(proof=False); tors=E.torsion_points()
+  gens=E.gens(proof=False); rank=len(gens); tors=E.torsion_points()
   emit('curve_data_unproved',code=code,rank=int(rank),gens=[str(P) for P in gens],torsion=[str(P) for P in tors])
  except Exception as ex2:
   emit('curve_error_unproved',code=code,error=repr(ex2)); sys.exit(0)
